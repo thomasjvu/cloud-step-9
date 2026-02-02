@@ -149,12 +149,7 @@ function stopMusic() {
 }
 
 function getMusicBPM() {
-  if (phase <= 1) return 85;
-  if (phase === 2) return 110;
-  if (phase === 3) return 145;
-  if (phase === 4) return 185;
-  if (phase === 5) return 230;
-  return Math.min(300, 230 + (phase - 5) * 12);
+  return getRoundBPM(phase);
 }
 
 function updateMusicTempo() {
@@ -248,9 +243,13 @@ function playMusicBeat(beat) {
 
 // ── State machine ─────────────────────────────────────────────────
 const STATE = {
-  TITLE: 0, READY: 1, JUMP_UP: 2, FALL: 3, ACTION_WINDOW: 4,
-  STOMP_HIT: 5, BOUNCE_UP: 6, MISS_BOUNCE: 7, MISS_FALL: 8,
-  RESULTS: 9, LEADERBOARD: 10, PHASE_CHANGE: 11, KEY_BIND: 12,
+  TITLE: 0, KEY_BIND: 1,
+  RUN_START: 2,
+  READY: 3, JUMP_UP: 4, FALL: 5,
+  STOMP_HIT: 6, BOUNCE_UP: 7,
+  MISS: 8, MISS_FALL: 9,
+  BOSS_DEFEATED: 10, ASCEND: 11,
+  RESULTS: 12,
 };
 
 // Global state (title/keybind only during gameplay)
@@ -281,17 +280,22 @@ function getVW() { return gameMode === '2P' ? 480 : GW; }
 function createPlayerState(playerIndex) {
   return {
     index: playerIndex,
-    nimbus: { x: 0, y: 0, vy: 0, expression: 'happy', rotation: 0, pose: 'idle', stretchX: 1, stretchY: 1, flipAngle: 0, isFlipping: false },
-    enemy: { x: 0, y: 0, squish: 0, flash: 0, type: 0 },
-    combo: 0, score: 0, bouncesSincePhase: 0,
+    nimbus: { x: 0, y: 0, vy: 0, vx: 0, expression: 'happy', rotation: 0, pose: 'idle', stretchX: 1, stretchY: 1, flipAngle: 0, isFlipping: false },
+    // Cloud targets: array of { x, y, hp, maxHp, type, squish, flash, isBoss, scale, defeated }
+    clouds: [], currentCloudIdx: 0,
+    cameraX: 0, cameraTargetX: 0,
+    combo: 0, score: 0, round: 1, bossHits: 0,
+    // Running start
+    runPlatform: [], runX: 0, runSpeed: 0, runAnimTimer: 0,
+    // Stomp timing ring
     ringProgress: 0, ringActive: false, ringActivationY: 0, ringStompY: 0,
     actionPressed: false, actionResult: '',
+    ringWobble: 0, ringPulsePhase: 0,
+    // Particles / effects
     particles: [], floatingTexts: [],
     screenShake: { x: 0, y: 0, intensity: 0 },
     timeSlowdown: 0, cloud9Overlay: 0, cloud9Text: '',
-    ringWobble: 0, ringPulsePhase: 0,
-    phaseChangeStep: 0, phaseScrollOffset: 0,
-    phaseOldEnemyY: 0, phaseNewEnemyY: -100, phaseSpeedLines: [],
+    phaseSpeedLines: [],
     state: STATE.READY, stateTimer: 0,
     inputJustPressed: false, inputPressed: false,
     alive: true, keyBinding: null, keyLabel: '',
@@ -531,18 +535,94 @@ function addFloatingTextP(p, x, y, text, color = WHITE, size = 28) {
 function getPhase() {
   if (!players.length) return 1;
   if (gameMode === '2P') {
-    const totalCombo = players.reduce((sum, p) => sum + p.combo, 0);
-    return Math.floor(totalCombo / 9) + 1;
+    return Math.max(...players.map(p => p.round));
   }
-  return Math.floor(players[0].combo / 9) + 1;
+  return players[0].round;
 }
-function getActivationDist(combo) {
-  return Math.max(MIN_ACTIVATION_DIST, BASE_ACTIVATION_DIST - combo * ACTIVATION_DECREASE);
+function getActivationDist(round) {
+  const base = BASE_ACTIVATION_DIST - (round - 1) * 15;
+  return Math.max(MIN_ACTIVATION_DIST, base);
 }
-function calculateScore(isPerfect) {
-  const phaseMult = phase;
+function calculateScore(isPerfect, round) {
+  const phaseMult = round || phase;
   const accuracyBonus = isPerfect ? 2.0 : 1.0;
   return Math.floor(100 * phaseMult * accuracyBonus);
+}
+function getRoundBPM(round) {
+  if (round <= 1) return 85;
+  if (round === 2) return 110;
+  if (round === 3) return 145;
+  if (round === 4) return 185;
+  if (round === 5) return 230;
+  return Math.min(300, 230 + (round - 5) * 12);
+}
+function getCloudCount(round) {
+  return 4 + Math.min(round, 6);
+}
+function getCloudSpacing(round) {
+  return Math.max(100, 180 - (round - 1) * 10);
+}
+// Jump velocity and gravity scale with round — big floaty jumps early, tighter later
+function getJumpVelocity(round) {
+  return -(18 - Math.min(round - 1, 6) * 0.8); // -18 at round 1, ~-13.2 at round 7+
+}
+function getBounceVelocity(round, combo) {
+  const base = 14 - Math.min(round - 1, 6) * 0.6; // 14 at round 1, ~10.4 at round 7+
+  return -(base + Math.min(combo * 0.12, 2));
+}
+function getGravity(round) {
+  return 0.35 + Math.min(round - 1, 8) * 0.04; // 0.35 at round 1, 0.67 at round 9+
+}
+function getFallGravity(round) {
+  return 0.40 + Math.min(round - 1, 8) * 0.04; // slightly heavier on the way down
+}
+function getBounceGravity(round) {
+  return 0.30 + Math.min(round - 1, 8) * 0.035; // lighter bounce for more hang time
+}
+
+// ── Run platform generation (runway before stomp chain) ─────────
+function generateRunPlatform(startX, round) {
+  // Creates a series of connected flat clouds the player runs across
+  const platform = [];
+  const count = 4 + Math.min(round, 3); // more clouds at higher rounds
+  const spacing = 50; // tight spacing — feels like a continuous path
+  let cx = startX;
+  const type = Math.min(round - 1, 4);
+  for (let i = 0; i < count; i++) {
+    platform.push({
+      x: cx, y: GROUND_Y, scale: 0.9 + Math.random() * 0.2, type,
+    });
+    cx += spacing;
+  }
+  return platform;
+}
+
+// ── Cloud chain generation ───────────────────────────────────────
+function generateCloudChain(startX, round) {
+  const clouds = [];
+  const count = getCloudCount(round);
+  const spacing = getCloudSpacing(round);
+  const type = Math.min(round - 1, 4);
+  let cx = startX;
+  // Platform clouds (1 HP each, no face)
+  for (let i = 0; i < count; i++) {
+    const yOff = (Math.random() - 0.5) * 40;
+    clouds.push({
+      x: cx, y: GROUND_Y + yOff, hp: 1, maxHp: 1,
+      type, squish: 0, flash: 0,
+      isBoss: false, scale: 0.8 + Math.random() * 0.3, defeated: false,
+    });
+    cx += spacing + Math.random() * 60;
+  }
+  // Boss cloud (9 HP, with face, bigger)
+  cx += spacing * 0.5;
+  const bossScale = gameMode === '2P' ? 1.8 : 2.5;
+  clouds.push({
+    x: cx, y: GROUND_Y, hp: 9, maxHp: 9,
+    type, squish: 0, flash: 0,
+    isBoss: true, scale: bossScale, defeated: false,
+  });
+  return clouds;
 }
 
 // ── Procedural drawing: Player ────────────────────────────────────
@@ -592,12 +672,29 @@ function drawPlayer(x, y, expression = 'happy', rot = 0, scale = 1, pose = 'idle
   else if (pose === 'fall') { px(-1, 10, 2, 2, SKIN); px(13, 10, 2, 2, SKIN); px(-2, 9, 2, 1, SKIN); px(14, 9, 2, 1, SKIN); }
   else if (pose === 'stomp') { px(1, 14, 2, 3, SKIN); px(11, 14, 2, 3, SKIN); px(1, 17, 2, 1, SKIN); px(11, 17, 2, 1, SKIN); }
   else if (pose === 'bounce') { px(-1, 9, 2, 2, SKIN); px(13, 9, 2, 2, SKIN); px(-2, 8, 2, 1, SKIN); px(14, 8, 2, 1, SKIN); }
+  else if (pose === 'run') {
+    // Running arms: one forward, one back (alternating based on runFrame encoded in rotation)
+    const runFrame = Math.floor(performance.now() / 120) % 2;
+    if (runFrame === 0) { px(-1, 10, 2, 3, SKIN); px(13, 8, 2, 3, SKIN); } else { px(-1, 8, 2, 3, SKIN); px(13, 10, 2, 3, SKIN); }
+  }
   else { px(0, 11, 2, 3, SKIN); px(12, 11, 2, 3, SKIN); px(0, 14, 2, 1, SKIN); px(12, 14, 2, 1, SKIN); }
   px(3, 15, 4, 2, SHORTS); px(7, 15, 4, 2, SHORTS);
   if (pose === 'jump_up') { px(4, 16, 2, 2, SKIN); px(8, 16, 2, 2, SKIN); px(3, 18, 3, 2, SHOE); px(8, 18, 3, 2, SHOE); px(3, 18, 3, 1, C9_LIGHT); px(8, 18, 3, 1, C9_LIGHT); }
   else if (pose === 'fall') { px(5, 17, 2, 2, SKIN); px(7, 17, 2, 2, SKIN); px(4, 19, 3, 2, SHOE); px(7, 19, 3, 2, SHOE); px(4, 19, 3, 1, C9_LIGHT); px(7, 19, 3, 1, C9_LIGHT); }
   else if (pose === 'stomp') { px(3, 17, 2, 2, SKIN); px(9, 17, 2, 2, SKIN); px(2, 19, 3, 2, SHOE); px(9, 19, 3, 2, SHOE); px(2, 19, 3, 1, C9_LIGHT); px(9, 19, 3, 1, C9_LIGHT); }
   else if (pose === 'bounce') { px(5, 17, 2, 2, SKIN); px(7, 17, 2, 2, SKIN); px(4, 19, 3, 2, SHOE); px(7, 19, 3, 2, SHOE); px(4, 19, 3, 1, C9_LIGHT); px(7, 19, 3, 1, C9_LIGHT); }
+  else if (pose === 'run') {
+    const runFrame = Math.floor(performance.now() / 120) % 2;
+    if (runFrame === 0) {
+      px(2, 17, 2, 2, SKIN); px(10, 17, 2, 2, SKIN);
+      px(1, 19, 3, 2, SHOE); px(10, 19, 3, 2, SHOE);
+      px(1, 19, 3, 1, C9_LIGHT); px(10, 19, 3, 1, C9_LIGHT);
+    } else {
+      px(5, 17, 2, 2, SKIN); px(7, 17, 2, 2, SKIN);
+      px(5, 19, 3, 2, SHOE); px(6, 19, 3, 2, SHOE);
+      px(5, 19, 3, 1, C9_LIGHT); px(6, 19, 3, 1, C9_LIGHT);
+    }
+  }
   else { px(4, 17, 2, 2, SKIN); px(8, 17, 2, 2, SKIN); px(3, 19, 3, 2, SHOE); px(8, 19, 3, 2, SHOE); px(3, 19, 3, 1, C9_LIGHT); px(8, 19, 3, 1, C9_LIGHT); }
   ctx.shadowColor = 'rgba(0, 158, 226, 0.0)';
   const glowGrad = ctx.createRadialGradient(0, -10 * P, 5, 0, -10 * P, 40);
@@ -606,11 +703,47 @@ function drawPlayer(x, y, expression = 'happy', rot = 0, scale = 1, pose = 'idle
   ctx.restore();
 }
 
-// ── Procedural drawing: Storm Puff (enemy) ────────────────────────
-function drawStormPuff(x, y, type = 0, squish = 0, flash = 0) {
+// ── Procedural drawing: Cloud Puff (no face — same shape as Storm Puff) ──
+function drawCloudPuff(x, y, type = 0, squish = 0, flash = 0, scale = 1) {
   ctx.save(); ctx.translate(x, y);
   const squishScale = 1 - squish * 0.25;
-  ctx.scale(1 + squish * 0.15, squishScale);
+  ctx.scale((1 + squish * 0.15) * scale, squishScale * scale);
+  const colors = [
+    { body: '#d8d8e8', dark: '#a8a8c0' },
+    { body: '#a0a0b8', dark: '#7878a0' },
+    { body: '#9a7cc3', dark: '#7a5ca3' },
+    { body: '#5a5a7a', dark: '#3a3a5a' },
+    { body: '#3a2a5e', dark: '#2a1a3e' },
+  ];
+  const c = colors[Math.min(type, colors.length - 1)];
+  if (flash > 0.3) ctx.fillStyle = WHITE; else ctx.fillStyle = c.body;
+  // Shadow
+  ctx.save(); ctx.globalAlpha = 0.15; ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.ellipse(0, 20, 30, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  // Cloud body — same circles as Storm Puff
+  if (flash <= 0.3) ctx.fillStyle = c.body;
+  ctx.beginPath(); ctx.arc(0, -5, 25, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-20, -2, 18, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(20, -2, 18, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-10, -20, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(12, -18, 15, 0, Math.PI * 2); ctx.fill();
+  // Bottom
+  if (flash <= 0.3) ctx.fillStyle = c.dark;
+  ctx.beginPath(); ctx.ellipse(0, 10, 30, 10, 0, 0, Math.PI); ctx.fill();
+  // No face! Just a subtle sheen
+  ctx.save(); ctx.globalAlpha = 0.12;
+  const sheen = ctx.createRadialGradient(-5, -15, 5, -5, -15, 25);
+  sheen.addColorStop(0, WHITE); sheen.addColorStop(1, 'transparent');
+  ctx.fillStyle = sheen; ctx.beginPath(); ctx.arc(-5, -15, 25, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+// ── Procedural drawing: Storm Puff (enemy / boss) ─────────────────
+function drawStormPuff(x, y, type = 0, squish = 0, flash = 0, scale = 1) {
+  ctx.save(); ctx.translate(x, y);
+  const squishScale = 1 - squish * 0.25;
+  ctx.scale((1 + squish * 0.15) * scale, squishScale * scale);
   const colors = [
     { body: '#b8b8c8', dark: '#8888a0', eye: '#555' },
     { body: '#707088', dark: '#505068', eye: '#ffcc00' },
@@ -751,10 +884,25 @@ function startGame() {
   players = [];
   for (let i = 0; i < numPlayers; i++) {
     const p = createPlayerState(i);
-    p.nimbus.x = vw / 2; p.nimbus.y = GROUND_Y - 40;
-    p.enemy.x = vw / 2; p.enemy.y = GROUND_Y;
+    p.round = 1;
+    // Generate run platform first, then stomp chain starts after it
+    p.runPlatform = generateRunPlatform(100, 1);
+    const lastRunCloud = p.runPlatform[p.runPlatform.length - 1];
+    const chainStartX = lastRunCloud.x + 180; // gap between runway and first stomp target
+    p.clouds = generateCloudChain(chainStartX, 1);
+    p.currentCloudIdx = 0;
+    p.cameraX = 0;
+    p.cameraTargetX = 0;
+    // Position player on first run platform cloud
+    p.runX = p.runPlatform[0].x;
+    p.nimbus.x = p.runX;
+    p.nimbus.y = GROUND_Y - 40;
+    p.runSpeed = 3 + Math.min(p.round * 0.5, 3);
+    p.runAnimTimer = 0;
     p.keyBinding = playerKeys[i].key;
     p.keyLabel = gameMode === '1P' ? 'SPACE' : playerKeys[i].label;
+    p.state = STATE.RUN_START;
+    p.stateTimer = 0;
     players.push(p);
   }
   state = null;
@@ -793,7 +941,7 @@ function update(dt) {
 
   // Update each player
   players.forEach(p => {
-    if (p.alive || p.state === STATE.MISS_FALL || p.state === STATE.RESULTS) updatePlayer(p, dt);
+    if (p.alive || p.state === STATE.MISS_FALL || p.state === STATE.RESULTS || p.state === STATE.RUN_START) updatePlayer(p, dt);
   });
 
   // Update shared phase
@@ -802,9 +950,7 @@ function update(dt) {
     phase = newPhase;
     const themeIdx = Math.min(phase - 1, SKY_THEMES.length - 1);
     targetSky = { ...SKY_THEMES[themeIdx] };
-    players.forEach(p => { p.enemy.type = Math.min(phase - 1, 4); });
     updateMusicTempo();
-    sfxPhaseUp();
   }
 
   // 2P combined results
@@ -814,7 +960,7 @@ function update(dt) {
       if (initialsEntry.pos >= 2) {
         const pl = players[initialsPlayerIndex];
         const name = initialsEntry.chars.join('');
-        addToLeaderboard(name, pl.score, pl.combo, phase);
+        addToLeaderboard(name, pl.score, pl.combo, pl.round);
         initialsEntry.active = false; sfxSelect();
         // Check if another player needs to enter
         if (initialsQueue.length > 0) {
@@ -839,6 +985,10 @@ function updateTitle(dt) {
   if (globalInputJustPressed && showLeaderboardFromTitle) showLeaderboardFromTitle = false;
 }
 
+function getCurrentCloud(p) {
+  return p.clouds[p.currentCloudIdx] || null;
+}
+
 function updatePlayer(p, dt) {
   let effectiveDt = dt;
   if (p.timeSlowdown > 0) { p.timeSlowdown -= dt; effectiveDt = dt * 0.3; }
@@ -861,39 +1011,90 @@ function updatePlayer(p, dt) {
     if (p.screenShake.intensity < 0.3) { p.screenShake.x = 0; p.screenShake.y = 0; p.screenShake.intensity = 0; }
   }
   if (p.cloud9Overlay > 0) p.cloud9Overlay -= dt * 0.6;
-  if (p.enemy.squish > 0) p.enemy.squish *= 0.9;
-  if (p.enemy.flash > 0) p.enemy.flash -= dt * 4;
+
+  // Update all cloud squish/flash
+  p.clouds.forEach(c => {
+    if (c.squish > 0) c.squish *= 0.9;
+    if (c.flash > 0) c.flash -= dt * 4;
+  });
 
   const vw = getVW();
+  const cloud = getCurrentCloud(p);
+
+  // Smooth camera pan toward current target
+  if (cloud) {
+    p.cameraTargetX = cloud.x - vw / 2;
+  }
+  p.cameraX += (p.cameraTargetX - p.cameraX) * Math.min(1, dt * 5);
 
   switch (p.state) {
+    case STATE.RUN_START: {
+      p.nimbus.expression = 'happy'; p.nimbus.pose = 'run';
+      p.runAnimTimer += effectiveDt;
+      // Auto-run right
+      p.runX += p.runSpeed;
+      p.nimbus.x = p.runX;
+      p.nimbus.y = GROUND_Y - 40;
+      // Subtle bob while running
+      p.nimbus.y += Math.sin(p.runAnimTimer * 12) * 2;
+      p.nimbus.stretchX = 1; p.nimbus.stretchY = 1;
+      // Camera follows runner
+      p.cameraTargetX = p.nimbus.x - vw * 0.35;
+      p.cameraX += (p.cameraTargetX - p.cameraX) * Math.min(1, effectiveDt * 4);
+      // Spawn subtle trail
+      if (Math.random() < 0.25) spawnTrailP(p, p.nimbus.x - p.cameraX, p.nimbus.y + 20);
+      // Check if we've reached the end of the run platform → launch into first stomp
+      const lastRunCloud = p.runPlatform[p.runPlatform.length - 1];
+      if (lastRunCloud && p.runX >= lastRunCloud.x + 40) {
+        // Jump off the runway edge toward first stomp cloud
+        p.state = STATE.JUMP_UP; p.stateTimer = 0;
+        p.nimbus.vy = getJumpVelocity(p.round);
+        p.nimbus.expression = 'determined';
+        sfxJump();
+      }
+      break;
+    }
     case STATE.READY: {
+      if (!cloud) break;
       p.nimbus.expression = 'determined'; p.nimbus.pose = 'idle';
+      p.nimbus.x = cloud.x;
       const readyProg = Math.min(1, p.stateTimer / 0.3);
       p.nimbus.stretchX = 1 + readyProg * 0.15; p.nimbus.stretchY = 1 - readyProg * 0.12;
-      if (p.stateTimer > 0.3) { p.state = STATE.JUMP_UP; p.stateTimer = 0; p.nimbus.vy = -14; sfxJump(); }
+      if (p.stateTimer > 0.3) {
+        p.state = STATE.JUMP_UP; p.stateTimer = 0;
+        p.nimbus.vy = getJumpVelocity(p.round);
+        sfxJump();
+      }
       break;
     }
     case STATE.JUMP_UP: {
+      if (!cloud) break;
       p.nimbus.expression = 'determined'; p.nimbus.pose = 'jump_up';
+      // Arc toward the target cloud X
+      const dx = cloud.x - p.nimbus.x;
+      p.nimbus.x += dx * 0.04;
       const jumpSpeed = Math.abs(p.nimbus.vy);
       p.nimbus.stretchX = 1 - Math.min(jumpSpeed * 0.012, 0.12);
       p.nimbus.stretchY = 1 + Math.min(jumpSpeed * 0.015, 0.15);
       p.nimbus.y += p.nimbus.vy * (p.timeSlowdown > 0 ? 0.3 : 1);
-      p.nimbus.vy += 0.5;
-      if (Math.random() < 0.4) spawnTrailP(p, p.nimbus.x, p.nimbus.y + 15);
+      p.nimbus.vy += getGravity(p.round);
+      if (Math.random() < 0.4) spawnTrailP(p, p.nimbus.x - p.cameraX, p.nimbus.y + 15);
       if (p.nimbus.vy >= 0) { p.state = STATE.FALL; p.stateTimer = 0; }
       break;
     }
     case STATE.FALL: {
+      if (!cloud) break;
       p.nimbus.expression = 'determined'; p.nimbus.pose = 'fall';
+      // Arc toward target cloud X
+      const dx = cloud.x - p.nimbus.x;
+      p.nimbus.x += dx * 0.06;
       const fallSpeed = Math.abs(p.nimbus.vy);
       p.nimbus.stretchX = 1 - Math.min(fallSpeed * 0.01, 0.1);
       p.nimbus.stretchY = 1 + Math.min(fallSpeed * 0.013, 0.13);
       p.nimbus.y += p.nimbus.vy * (p.timeSlowdown > 0 ? 0.3 : 1);
-      p.nimbus.vy += 0.55;
-      const stompY = p.enemy.y - 55;
-      const actDist = getActivationDist(p.combo);
+      p.nimbus.vy += getFallGravity(p.round);
+      const stompY = cloud.y - 55 * cloud.scale;
+      const actDist = getActivationDist(p.round);
       if (!p.ringActive && p.nimbus.y > stompY - actDist) {
         p.ringActive = true; p.ringProgress = 0; p.ringActivationY = p.nimbus.y;
         p.ringStompY = stompY; p.actionPressed = false; p.actionResult = ''; p.ringPulsePhase = 0;
@@ -903,7 +1104,7 @@ function updatePlayer(p, dt) {
         if (p.inputJustPressed && !p.actionPressed) {
           p.actionPressed = true;
           const acc = p.ringProgress;
-          const extraPhases = Math.max(0, phase - 5);
+          const extraPhases = Math.max(0, p.round - 5);
           const perfectLow = Math.min(0.88, 0.72 + extraPhases * 0.02);
           const goodLow = Math.min(0.75, 0.55 + extraPhases * 0.015);
           if (acc >= perfectLow && acc <= 0.97) p.actionResult = 'perfect';
@@ -915,14 +1116,15 @@ function updatePlayer(p, dt) {
       if (p.nimbus.y >= stompY) {
         p.nimbus.y = stompY; p.ringActive = false;
         if (p.actionResult === 'perfect' || p.actionResult === 'good') p.state = STATE.STOMP_HIT;
-        else p.state = STATE.MISS_BOUNCE;
+        else p.state = STATE.MISS;
         p.stateTimer = 0;
       }
       break;
     }
     case STATE.STOMP_HIT: {
+      if (!cloud) break;
       const isPerfect = p.actionResult === 'perfect';
-      let points = calculateScore(isPerfect);
+      let points = calculateScore(isPerfect, p.round);
       const rhythmAcc = getBeatAccuracy();
       lastStompOnBeat = rhythmAcc > 0;
       if (lastStompOnBeat) {
@@ -932,115 +1134,72 @@ function updatePlayer(p, dt) {
         playTone(1047, 0.08, 'sine', 0.1);
         setTimeout(() => playTone(1319, 0.06, 'sine', 0.08), 40);
       }
-      p.score += points; p.combo++; p.bouncesSincePhase++;
-      p.enemy.squish = 1; p.enemy.flash = 1;
+      p.score += points; p.combo++;
+      cloud.hp--;
+      cloud.squish = 1; cloud.flash = 1;
       p.screenShake.intensity = isPerfect ? 12 : 8;
       sfxStomp();
-      spawnImpactP(p, p.enemy.x, p.enemy.y - 20, isPerfect ? 15 : 8);
-      spawnStarsP(p, p.enemy.x, p.enemy.y - 40, isPerfect ? 10 : 5);
-      spawnRingBurstP(p, p.enemy.x, p.enemy.y - 30);
-      addFloatingTextP(p, p.enemy.x + (Math.random() - 0.5) * 30, p.enemy.y - 70, `+${points}`, GOLD, 30);
+      const drawX = cloud.x - p.cameraX;
+      spawnImpactP(p, drawX, cloud.y - 20, isPerfect ? 15 : 8);
+      spawnStarsP(p, drawX, cloud.y - 40, isPerfect ? 10 : 5);
+      spawnRingBurstP(p, drawX, cloud.y - 30);
+      addFloatingTextP(p, drawX + (Math.random() - 0.5) * 30, cloud.y - 70, `+${points}`, GOLD, 30);
       if (isPerfect) {
-        addFloatingTextP(p, p.enemy.x + 50, p.enemy.y - 95, 'PERFECT!', PERFECT_GREEN, 26);
+        addFloatingTextP(p, drawX + 50, cloud.y - 95, 'PERFECT!', PERFECT_GREEN, 26);
         sfxPerfect(); p.timeSlowdown = 0.15;
       } else {
-        addFloatingTextP(p, p.enemy.x + 40, p.enemy.y - 90, 'GOOD!', C9_LIGHT, 22);
+        addFloatingTextP(p, drawX + 40, cloud.y - 90, 'GOOD!', C9_LIGHT, 22);
       }
-      if (lastStompOnBeat) addFloatingTextP(p, p.enemy.x - 60, p.enemy.y - 130, 'RHYTHM!', '#FF88FF', 20);
-      if (p.combo > 1) addFloatingTextP(p, p.enemy.x - 55, p.enemy.y - 105, `${p.combo}x`, WHITE, 20);
+      if (lastStompOnBeat) addFloatingTextP(p, drawX - 60, cloud.y - 130, 'RHYTHM!', '#FF88FF', 20);
+      if (p.combo > 1) addFloatingTextP(p, drawX - 55, cloud.y - 105, `${p.combo}x`, WHITE, 20);
 
-      // Cloud 9 bonus
-      if (p.combo % 9 === 0 && p.combo > 0) {
-        p.score += 900;
-        addFloatingTextP(p, vw / 2, GH / 2 - 60, '+900 CLOUD 9!', GOLD, 36);
-        sfxCloud9();
-        spawnCloud9BurstP(p, vw / 2, GH / 2);
-        p.cloud9Overlay = 2.0; p.cloud9Text = 'CLOUD 9!';
-        phaseTransitionFlash = 0.5;
-
-        // In 2P skip cinematic phase change, just update visuals
-        if (gameMode === '2P') {
-          // Phase is updated globally in update()
-        } else {
-          // 1P: cinematic phase change
-          const newPhase = getPhase();
-          if (newPhase !== phase) {
-            phase = newPhase;
-            const themeIdx = Math.min(phase - 1, SKY_THEMES.length - 1);
-            targetSky = { ...SKY_THEMES[themeIdx] };
-            p.enemy.type = Math.min(phase - 1, 4);
-            sfxPhaseUp(); updateMusicTempo();
-            p.state = STATE.PHASE_CHANGE; p.stateTimer = 0;
-            p.phaseChangeStep = 0; p.phaseScrollOffset = 0;
-            p.phaseOldEnemyY = p.enemy.y; p.phaseNewEnemyY = -100; p.phaseSpeedLines = [];
-            p.nimbus.vy = 0; p.nimbus.expression = 'excited';
-            break;
-          }
+      // Cloud destroyed?
+      if (cloud.hp <= 0) {
+        cloud.defeated = true;
+        if (cloud.isBoss) {
+          // Boss defeated!
+          p.bossHits = cloud.maxHp;
+          p.score += 900;
+          addFloatingTextP(p, vw / 2, GH / 2 - 60, '+900 CLOUD 9!', GOLD, 36);
+          sfxCloud9();
+          spawnCloud9BurstP(p, vw / 2, GH / 2);
+          p.cloud9Overlay = 2.0; p.cloud9Text = 'CLOUD 9!';
+          phaseTransitionFlash = 0.5;
+          p.state = STATE.BOSS_DEFEATED; p.stateTimer = 0;
+          break;
         }
+        // Advance to next cloud
+        p.currentCloudIdx++;
       }
+
+      // Bounce up toward next cloud
       p.nimbus.expression = 'happy'; p.nimbus.pose = 'stomp';
       p.nimbus.stretchX = 1.2; p.nimbus.stretchY = 0.75;
       p.state = STATE.BOUNCE_UP; p.stateTimer = 0;
-      p.nimbus.vy = -10 - Math.min(p.combo * 0.15, 3);
+      p.nimbus.vy = getBounceVelocity(p.round, p.combo);
       if (isPerfect && lastStompOnBeat) { p.nimbus.isFlipping = true; p.nimbus.flipAngle = 0; }
       else { p.nimbus.isFlipping = false; p.nimbus.flipAngle = 0; }
       sfxBounce();
       break;
     }
-    case STATE.PHASE_CHANGE: {
-      p.nimbus.expression = 'excited'; p.nimbus.pose = 'jump_up';
-      p.nimbus.stretchX = 1; p.nimbus.stretchY = 1;
-      p.nimbus.isFlipping = false; p.nimbus.flipAngle = 0; p.nimbus.rotation = 0;
-      const ENEMY_Y = p.enemy.y > 100 ? GROUND_Y : GROUND_Y;
-      if (p.phaseChangeStep === 0) {
-        const sinkProgress = Math.min(1, p.stateTimer / 0.5);
-        const stompY = p.phaseOldEnemyY - 55;
-        p.nimbus.y = stompY + sinkProgress * 55;
-        p.enemy.squish = sinkProgress * 0.6;
-        p.phaseOldEnemyY = GROUND_Y + sinkProgress * 300;
-        p.enemy.y = p.phaseOldEnemyY;
-        if (sinkProgress > 0.3 && Math.random() < 0.5) spawnImpactP(p, p.nimbus.x, p.nimbus.y, 2, C9_LIGHT);
-        phaseTransitionFlash = Math.min(0.6, sinkProgress * 0.6);
-        if (p.stateTimer >= 0.5) { p.phaseChangeStep = 1; p.stateTimer = 0; p.nimbus.y = GH + 50; sfxPhaseUp(); }
-      } else if (p.phaseChangeStep === 1) {
-        const launchProgress = Math.min(1, p.stateTimer / 0.7);
-        const easeOut = 1 - Math.pow(1 - launchProgress, 3);
-        spawnSpeedLinesP(p, 3);
-        p.phaseSpeedLines = p.phaseSpeedLines.filter(l => { l.y += l.speed; return l.y < GH + 100; });
-        p.phaseScrollOffset = easeOut * 400;
-        p.nimbus.y = GH + 50 - easeOut * (GH + 50 - (GROUND_Y - 120));
-        p.nimbus.rotation = 0;
-        phaseTransitionFlash = 0.6 * (1 - launchProgress);
-        if (p.stateTimer >= 0.7) { p.phaseChangeStep = 2; p.stateTimer = 0; p.phaseNewEnemyY = -80; p.phaseSpeedLines = []; }
-      } else if (p.phaseChangeStep === 2) {
-        const arriveProgress = Math.min(1, p.stateTimer / 0.6);
-        const easeOut = 1 - Math.pow(1 - arriveProgress, 2);
-        p.phaseNewEnemyY = -80 + easeOut * (GROUND_Y + 80);
-        p.enemy.y = p.phaseNewEnemyY; p.enemy.squish = (1 - arriveProgress) * 0.3;
-        p.nimbus.y = (GROUND_Y - 120) + easeOut * (GROUND_Y - 55 - (GROUND_Y - 120));
-        p.phaseScrollOffset = 400 * (1 - easeOut);
-        if (p.stateTimer >= 0.6) {
-          p.enemy.y = GROUND_Y; p.enemy.squish = 0;
-          p.nimbus.y = GROUND_Y - 110; p.nimbus.vy = -12;
-          p.nimbus.expression = 'happy'; p.ringActive = false; p.ringProgress = 0;
-          p.actionPressed = false; p.actionResult = ''; p.phaseScrollOffset = 0; p.phaseSpeedLines = [];
-          p.state = STATE.BOUNCE_UP; p.stateTimer = 0; sfxBounce();
-        }
-      }
-      break;
-    }
     case STATE.BOUNCE_UP: {
       p.nimbus.expression = p.combo >= 18 ? 'excited' : 'happy';
+      // Drift toward next cloud target
+      const nextCloud = getCurrentCloud(p);
+      if (nextCloud) {
+        const dx = nextCloud.x - p.nimbus.x;
+        p.nimbus.x += dx * 0.03;
+      }
       p.nimbus.y += p.nimbus.vy * (p.timeSlowdown > 0 ? 0.3 : 1);
-      p.nimbus.vy += 0.45;
-      if (Math.random() < 0.3) spawnTrailP(p, p.nimbus.x, p.nimbus.y + 15);
+      p.nimbus.vy += getBounceGravity(p.round);
+      if (Math.random() < 0.3) spawnTrailP(p, p.nimbus.x - p.cameraX, p.nimbus.y + 15);
       if (p.nimbus.isFlipping) {
         p.nimbus.pose = 'bounce'; p.nimbus.flipAngle += 0.06;
         const tiltProgress = Math.min(1, p.nimbus.flipAngle / 1.2);
         const tiltEase = Math.sin(tiltProgress * Math.PI);
         p.nimbus.rotation = tiltEase * 0.5;
         if (Math.random() < 0.3) {
-          p.particles.push({ x: p.nimbus.x + (Math.random()-0.5)*16, y: p.nimbus.y + (Math.random()-0.5)*16, vx: (Math.random()-0.5)*0.8, vy: -0.5 - Math.random()*0.5, life: 0.5, size: 1.5 + Math.random()*2, color: '#FF88FF', type: 'star' });
+          p.particles.push({ x: p.nimbus.x - p.cameraX + (Math.random()-0.5)*16, y: p.nimbus.y + (Math.random()-0.5)*16, vx: (Math.random()-0.5)*0.8, vy: -0.5 - Math.random()*0.5, life: 0.5, size: 1.5 + Math.random()*2, color: '#FF88FF', type: 'star' });
         }
         if (p.nimbus.flipAngle >= 1.2) { p.nimbus.flipAngle = 0; p.nimbus.rotation = 0; p.nimbus.isFlipping = false; }
       } else { p.nimbus.pose = 'bounce'; p.nimbus.rotation = 0; }
@@ -1054,14 +1213,16 @@ function updatePlayer(p, dt) {
       }
       break;
     }
-    case STATE.MISS_BOUNCE: {
+    case STATE.MISS: {
+      if (!cloud) break;
       p.nimbus.expression = 'sad'; p.nimbus.pose = 'idle';
       p.nimbus.stretchX = 1; p.nimbus.stretchY = 1;
       p.nimbus.isFlipping = false; p.nimbus.flipAngle = 0;
       if (gameMode === '1P') stopMusic();
       sfxMiss();
-      addFloatingTextP(p, p.enemy.x, p.enemy.y - 80, 'MISS!', MISS_RED, 32);
-      p.enemy.squish = 0.3; p.screenShake.intensity = 5;
+      const missDrawX = cloud.x - p.cameraX;
+      addFloatingTextP(p, missDrawX, cloud.y - 80, 'MISS!', MISS_RED, 32);
+      cloud.squish = 0.3; p.screenShake.intensity = 5;
       p.nimbus.vy = -6; p.state = STATE.MISS_FALL; p.stateTimer = 0;
       p.alive = false;
       break;
@@ -1069,8 +1230,8 @@ function updatePlayer(p, dt) {
     case STATE.MISS_FALL: {
       p.nimbus.expression = 'sad';
       p.nimbus.y += p.nimbus.vy; p.nimbus.vy += 0.6; p.nimbus.rotation += 0.08;
-      if (p.nimbus.y >= GROUND_Y - 20) {
-        p.nimbus.y = GROUND_Y - 20; p.nimbus.rotation = 0;
+      if (p.nimbus.y >= GH + 50) {
+        p.nimbus.rotation = 0;
         p.state = STATE.RESULTS; p.stateTimer = 0;
         if (gameMode === '1P') {
           idleTimer = 0;
@@ -1078,11 +1239,9 @@ function updatePlayer(p, dt) {
             initialsEntry.active = true; initialsEntry.chars = ['A','A','A']; initialsEntry.pos = 0;
           }
         } else {
-          // 2P: check if both dead
           if (players.every(pl => !pl.alive)) {
             idleTimer = 0;
             stopMusic();
-            // Build queue of players who qualify for leaderboard (winner first)
             const sorted = [...players].sort((a, b) => b.score - a.score);
             initialsQueue = sorted.filter(pl => pl.score > 0 && isHighScore(pl.score)).map(pl => pl.index);
             if (initialsQueue.length > 0) {
@@ -1094,20 +1253,78 @@ function updatePlayer(p, dt) {
       }
       break;
     }
+
+    // ── BOSS DEFEATED + ASCEND ─────────────────────────────────
+    case STATE.BOSS_DEFEATED: {
+      const bossCloud = p.clouds[p.clouds.length - 1];
+      p.nimbus.expression = 'excited'; p.nimbus.pose = 'bounce';
+      const prog = Math.min(1, p.stateTimer / 2.0);
+      if (bossCloud) {
+        bossCloud.y = GROUND_Y + prog * 200;
+        bossCloud.squish = prog * 0.5;
+      }
+      p.nimbus.y = GROUND_Y - 80 - Math.sin(prog * Math.PI) * 60;
+      if (prog < 0.5 && Math.random() < 0.4) spawnStarsP(p, vw / 2, GH / 2, 2);
+      if (p.stateTimer >= 2.0) {
+        p.state = STATE.ASCEND; p.stateTimer = 0;
+        p.phaseSpeedLines = [];
+        sfxPhaseUp();
+      }
+      break;
+    }
+    case STATE.ASCEND: {
+      p.nimbus.expression = 'excited'; p.nimbus.pose = 'jump_up';
+      const prog = Math.min(1, p.stateTimer / 1.5);
+      const easeOut = 1 - Math.pow(1 - prog, 3);
+      // More speed lines for dramatic B&W effect
+      const lineCount = prog < 0.4 ? 3 : prog < 0.8 ? 5 : 2;
+      spawnSpeedLinesP(p, lineCount);
+      p.phaseSpeedLines = p.phaseSpeedLines.filter(l => { l.y += l.speed; return l.y < GH + 100; });
+      p.nimbus.y = GROUND_Y - 80 - easeOut * (GH + 100);
+      // Subtle flash only at very start and end, not during B&W peak
+      if (prog < 0.1 || prog > 0.9) phaseTransitionFlash = 0.3 * (prog < 0.1 ? 1 - prog * 10 : (prog - 0.9) * 10);
+      if (p.stateTimer >= 1.5) {
+        // Start new round
+        p.round++;
+        phase = getPhase();
+        const themeIdx = Math.min(phase - 1, SKY_THEMES.length - 1);
+        targetSky = { ...SKY_THEMES[themeIdx] };
+        updateMusicTempo();
+        // Generate new run platform + cloud chain
+        const newCamBase = p.cameraX + vw * 0.35;
+        p.runPlatform = generateRunPlatform(newCamBase, p.round);
+        const lastRC = p.runPlatform[p.runPlatform.length - 1];
+        p.clouds = generateCloudChain(lastRC.x + 180, p.round);
+        p.currentCloudIdx = 0;
+        p.bossHits = 0;
+        p.runX = p.runPlatform[0].x;
+        p.runSpeed = 3 + Math.min(p.round * 0.5, 3);
+        p.runAnimTimer = 0;
+        p.nimbus.x = p.runX;
+        p.nimbus.y = GROUND_Y - 40;
+        p.nimbus.vy = 0; p.nimbus.rotation = 0;
+        p.nimbus.isFlipping = false; p.nimbus.flipAngle = 0;
+        p.phaseSpeedLines = [];
+        p.ringActive = false; p.ringProgress = 0;
+        p.actionPressed = false; p.actionResult = '';
+        p.state = STATE.RUN_START; p.stateTimer = 0;
+      }
+      break;
+    }
+
     case STATE.RESULTS: {
       if (gameMode === '1P') {
         idleTimer += dt; p.nimbus.expression = 'sad';
         if (initialsEntry.active && p.inputJustPressed) {
           if (initialsEntry.pos >= 2) {
             const name = initialsEntry.chars.join('');
-            addToLeaderboard(name, p.score, p.combo, phase);
+            addToLeaderboard(name, p.score, p.combo, p.round);
             initialsEntry.active = false; sfxSelect();
           } else { initialsEntry.pos++; sfxSelect(); }
         }
         if (!initialsEntry.active && p.stateTimer > 1.0 && p.inputJustPressed) { state = STATE.TITLE; p.stateTimer = 0; }
         if (idleTimer > 30) { state = STATE.TITLE; p.stateTimer = 0; }
       }
-      // 2P results handled in main update
       break;
     }
   }
@@ -1158,32 +1375,210 @@ function drawPlayerViewport(p, dt) {
 
   drawBackground(dt, vw);
 
-  // Draw enemy
-  drawStormPuff(p.enemy.x, p.enemy.y, p.enemy.type, p.enemy.squish, p.enemy.flash);
+  const isGameplay = p.state !== STATE.RESULTS && p.state !== STATE.ASCEND;
 
-  // Beat pulse ring
-  if (musicPlaying && beatPulse > 0 && p.state !== STATE.PHASE_CHANGE) {
+  if (isGameplay || p.state === STATE.BOSS_DEFEATED) {
+    // ── World-space: draw all clouds with camera ──
     ctx.save();
-    const pulseR = 40 + (1 - beatPulse) * 25;
-    ctx.globalAlpha = beatPulse * 0.4; ctx.strokeStyle = C9_LIGHT;
-    ctx.lineWidth = 2 + beatPulse * 2;
-    ctx.beginPath(); ctx.arc(p.enemy.x, p.enemy.y - 5, pulseR, 0, Math.PI * 2); ctx.stroke();
+    ctx.translate(-p.cameraX, 0);
+
+    // Draw run platform clouds (runway, no face, no HP)
+    if (p.runPlatform && p.runPlatform.length > 0) {
+      p.runPlatform.forEach(rc => {
+        const screenX = rc.x - p.cameraX;
+        if (screenX < -80 || screenX > vw + 80) return;
+        drawCloudPuff(rc.x, rc.y, rc.type, 0, 0, rc.scale);
+      });
+    }
+
+    // Draw all clouds
+    p.clouds.forEach((cloud, i) => {
+      const screenX = cloud.x - p.cameraX;
+      if (screenX < -100 || screenX > vw + 100) return;
+      if (cloud.defeated && !cloud.isBoss) return; // skip destroyed platform clouds
+
+      if (cloud.isBoss) {
+        // Boss: Storm Puff with face
+        drawStormPuff(cloud.x, cloud.y, cloud.type, cloud.squish, cloud.flash, cloud.scale);
+      } else {
+        // Platform cloud: same shape, no face
+        drawCloudPuff(cloud.x, cloud.y, cloud.type, cloud.squish, cloud.flash, cloud.scale);
+      }
+
+      // Beat pulse on current target
+      if (i === p.currentCloudIdx && musicPlaying && beatPulse > 0) {
+        ctx.save();
+        const pulseR = 30 * cloud.scale + (1 - beatPulse) * 20;
+        ctx.globalAlpha = beatPulse * 0.4; ctx.strokeStyle = C9_LIGHT;
+        ctx.lineWidth = 2 + beatPulse * 2;
+        ctx.beginPath(); ctx.arc(cloud.x, cloud.y - 5, pulseR, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+      }
+
+      // Health bar for boss (multi-HP)
+      if (cloud.isBoss && cloud.hp < cloud.maxHp) {
+        const barW = 120; const barH = 10;
+        const barX = cloud.x - barW / 2;
+        const barY = cloud.y - 65 * cloud.scale;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
+        const segW = barW / cloud.maxHp;
+        for (let si = 0; si < cloud.maxHp; si++) {
+          const sx = barX + si * segW;
+          ctx.fillStyle = si < cloud.hp ? (cloud.hp <= 1 ? MISS_RED : cloud.hp <= 3 ? GOLD : PERFECT_GREEN) : 'rgba(100,100,100,0.4)';
+          ctx.fillRect(sx + 1, barY, segW - 2, barH);
+        }
+      }
+
+      // Boss expression warning
+      if (cloud.isBoss && cloud.hp <= 1 && cloud.hp > 0) {
+        ctx.save(); ctx.globalAlpha = 0.6 + Math.sin(performance.now() * 0.01) * 0.3;
+        drawStrokedText('!!', cloud.x, cloud.y - 50 * cloud.scale, MISS_RED, 18, '#000', 2);
+        ctx.restore();
+      }
+    });
+
+    // Player shadow (world-space)
+    ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = '#000';
+    const shadowScale = Math.max(0.3, 1 - (GROUND_Y - p.nimbus.y) / 300);
+    ctx.beginPath(); ctx.ellipse(p.nimbus.x, GROUND_Y + 5, 18 * shadowScale, 5 * shadowScale, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+
+    // Draw player (world-space)
+    const playerScale = 1 + (p.state === STATE.STOMP_HIT ? 0.12 : 0);
+    drawPlayer(p.nimbus.x, p.nimbus.y, p.nimbus.expression, p.nimbus.rotation, playerScale, p.nimbus.pose, p.nimbus.stretchX, p.nimbus.stretchY);
+
+    // Action ring (world-space, on current cloud)
+    const cloud = getCurrentCloud(p);
+    if (p.ringActive && cloud) {
+      drawActionRing(p, cloud.x, cloud.y - 35 * cloud.scale);
+    }
+
+    ctx.restore(); // end camera transform
+
+    // Speed lines during fall (higher rounds, screen-space)
+    if (p.state === STATE.FALL && p.round >= 4) {
+      const nimbusScreenX = p.nimbus.x - p.cameraX;
+      const lineCount = Math.min(p.round - 3, 4);
+      for (let i = 0; i < lineCount; i++) {
+        ctx.save(); ctx.globalAlpha = 0.15 + Math.random() * 0.15; ctx.strokeStyle = WHITE; ctx.lineWidth = 1;
+        const lx = nimbusScreenX + (Math.random()-0.5)*120; const ly = p.nimbus.y - 30;
+        ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + (Math.random()-0.5)*4, ly + 20 + Math.random()*30); ctx.stroke(); ctx.restore();
+      }
+    }
+
+    // "BOSS!" indicator when approaching boss cloud
+    if (cloud && cloud.isBoss && p.state === STATE.BOUNCE_UP) {
+      const alpha = 0.5 + Math.sin(performance.now() * 0.008) * 0.3;
+      ctx.save(); ctx.globalAlpha = alpha;
+      const bScale = 1 + Math.sin(performance.now() * 0.008) * 0.08;
+      ctx.translate(vw / 2, GH / 4); ctx.scale(bScale, bScale);
+      drawStrokedText('BOSS!', 0, 0, MISS_RED, gameMode === '2P' ? 28 : 40, '#500', 4);
+      ctx.restore();
+    }
+
+  } else if (p.state === STATE.ASCEND) {
+    // ── Black & White Line-Art Ascension Effect ──
+    const prog = Math.min(1, p.stateTimer / 1.5);
+
+    // Phase 1 (0-0.4): desaturate to B&W
+    // Phase 2 (0.4-0.8): full B&W with bold line-art outlines
+    // Phase 3 (0.8-1.0): flash back to color
+
+    const desatProg = Math.min(1, prog / 0.4); // 0→1 over first 40%
+    const returnProg = prog > 0.8 ? (prog - 0.8) / 0.2 : 0; // 0→1 in last 20%
+    const bwAmount = returnProg > 0 ? 1 - returnProg : desatProg;
+
+    // Apply grayscale filter to canvas
+    ctx.save();
+    ctx.filter = `grayscale(${bwAmount * 100}%) contrast(${100 + bwAmount * 60}%)`;
+
+    // Speed lines — thicker, more dramatic in B&W
+    ctx.save();
+    p.phaseSpeedLines.forEach(l => {
+      const lineAlpha = l.opacity * (1 + bwAmount * 0.8);
+      ctx.globalAlpha = Math.min(1, lineAlpha);
+      ctx.strokeStyle = bwAmount > 0.5 ? '#000' : WHITE;
+      ctx.lineWidth = l.width * (1 + bwAmount * 2);
+      ctx.beginPath(); ctx.moveTo(l.x, l.y); ctx.lineTo(l.x, l.y + l.len); ctx.stroke();
+    });
+    ctx.restore();
+
+    // Draw player ascending
+    drawPlayer(vw / 2, p.nimbus.y, p.nimbus.expression, p.nimbus.rotation, 1, p.nimbus.pose, p.nimbus.stretchX, p.nimbus.stretchY);
+
+    ctx.restore(); // remove filter
+
+    // Line-art overlay: bold outlines radiating from center during peak B&W
+    if (bwAmount > 0.3) {
+      const lineArtAlpha = Math.min(1, (bwAmount - 0.3) / 0.4);
+      ctx.save();
+      ctx.globalAlpha = lineArtAlpha * 0.6;
+
+      // Radial burst lines from player position
+      const cx = vw / 2; const cy = p.nimbus.y;
+      const burstCount = 24;
+      for (let i = 0; i < burstCount; i++) {
+        const angle = (Math.PI * 2 / burstCount) * i + prog * 2;
+        const innerR = 30 + Math.sin(prog * 8 + i) * 10;
+        const outerR = 150 + prog * 200 + Math.sin(prog * 6 + i * 0.7) * 40;
+        ctx.strokeStyle = i % 2 === 0 ? '#000' : '#fff';
+        ctx.lineWidth = 1.5 + Math.sin(prog * 10 + i) * 0.8;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * innerR, cy + Math.sin(angle) * innerR);
+        ctx.lineTo(cx + Math.cos(angle) * outerR, cy + Math.sin(angle) * outerR);
+        ctx.stroke();
+      }
+
+      // Concentric rings (line-art style)
+      const ringCount = 3;
+      for (let r = 0; r < ringCount; r++) {
+        const radius = 60 + r * 80 + prog * 100;
+        ctx.strokeStyle = r % 2 === 0 ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    // Cross-hatch / sketch texture overlay at peak B&W
+    if (bwAmount > 0.6) {
+      const hatchAlpha = (bwAmount - 0.6) / 0.4 * 0.12;
+      ctx.save(); ctx.globalAlpha = hatchAlpha;
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 0.5;
+      for (let i = 0; i < 40; i++) {
+        const hx = Math.random() * vw; const hy = Math.random() * GH;
+        const hLen = 15 + Math.random() * 25;
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx + hLen * 0.7, hy + hLen); ctx.stroke();
+      }
+      // Opposite diagonal hatching
+      for (let i = 0; i < 20; i++) {
+        const hx = Math.random() * vw; const hy = Math.random() * GH;
+        const hLen = 10 + Math.random() * 20;
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx - hLen * 0.7, hy + hLen); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Vignette darkening at edges during B&W phase
+    if (bwAmount > 0.2) {
+      ctx.save();
+      const vigAlpha = (bwAmount - 0.2) * 0.5;
+      const vig = ctx.createRadialGradient(vw / 2, GH / 2, vw * 0.2, vw / 2, GH / 2, vw * 0.7);
+      vig.addColorStop(0, 'rgba(0,0,0,0)'); vig.addColorStop(1, `rgba(0,0,0,${vigAlpha})`);
+      ctx.fillStyle = vig; ctx.fillRect(0, 0, vw, GH);
+      ctx.restore();
+    }
+
+    // Ascend text — white on black during B&W, gold normally
+    const textAlpha = Math.min(1, p.stateTimer / 0.3) * Math.max(0, 1 - (p.stateTimer - 1.0) / 0.5);
+    ctx.save(); ctx.globalAlpha = Math.max(0, textAlpha);
+    const textColor = bwAmount > 0.5 ? WHITE : GOLD;
+    const strokeColor = bwAmount > 0.5 ? '#000' : '#5C2D00';
+    drawStrokedText(`ROUND ${p.round + 1}`, vw / 2, GH / 2, textColor, gameMode === '2P' ? 32 : 48, strokeColor, 5);
     ctx.restore();
   }
 
-  // Player shadow
-  ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = '#000';
-  const shadowScale = Math.max(0.3, 1 - (GROUND_Y - p.nimbus.y) / 300);
-  ctx.beginPath(); ctx.ellipse(p.nimbus.x, GROUND_Y + 5, 18 * shadowScale, 5 * shadowScale, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-
-  // Draw player
-  const playerScale = 1 + (p.state === STATE.STOMP_HIT ? 0.12 : 0);
-  drawPlayer(p.nimbus.x, p.nimbus.y, p.nimbus.expression, p.nimbus.rotation, playerScale, p.nimbus.pose, p.nimbus.stretchX, p.nimbus.stretchY);
-
-  // Action ring
-  if (p.ringActive) drawActionRing(p, p.enemy.x, p.enemy.y - 35);
-
-  // Particles
+  // Particles (screen-space)
   p.particles.forEach(pt => {
     ctx.save(); ctx.globalAlpha = Math.max(0, pt.life); ctx.fillStyle = pt.color;
     if (pt.type === 'star') drawStar(pt.x, pt.y, pt.size);
@@ -1212,7 +1607,7 @@ function drawPlayerViewport(p, dt) {
     ctx.restore();
     if (p.cloud9Overlay > 1) {
       ctx.save(); ctx.globalAlpha = Math.min(1, (p.cloud9Overlay - 1) * 2);
-      drawStrokedText(`PHASE ${phase}`, vw / 2, GH / 2 + 20, C9_LIGHT, gameMode === '2P' ? 20 : 28, '#000', 3);
+      drawStrokedText(`ROUND ${p.round}`, vw / 2, GH / 2 + 20, C9_LIGHT, gameMode === '2P' ? 20 : 28, '#000', 3);
       ctx.restore();
     }
   }
@@ -1220,51 +1615,18 @@ function drawPlayerViewport(p, dt) {
   // HUD
   drawHUD(p, vw);
 
-  // Phase change overlay
-  if (p.state === STATE.PHASE_CHANGE) {
-    if (p.phaseChangeStep === 1) {
-      ctx.save();
-      p.phaseSpeedLines.forEach(l => {
-        ctx.globalAlpha = l.opacity; ctx.strokeStyle = WHITE; ctx.lineWidth = l.width;
-        ctx.beginPath(); ctx.moveTo(l.x, l.y); ctx.lineTo(l.x, l.y + l.len); ctx.stroke();
-      });
-      ctx.restore();
-    }
-    if (p.phaseChangeStep >= 1) {
-      const textAlpha = p.phaseChangeStep === 1 ? Math.min(1, p.stateTimer / 0.3) : Math.max(0, 1 - p.stateTimer / 0.4);
-      ctx.save(); ctx.globalAlpha = textAlpha;
-      const c9Scale = 1 + Math.sin(performance.now() * 0.008) * 0.05;
-      ctx.translate(vw / 2, GH / 2 - 40); ctx.scale(c9Scale, c9Scale);
-      drawStrokedText('CLOUD 9!', 0, 0, GOLD, gameMode === '2P' ? 36 : 56, '#5C2D00', 6);
-      ctx.restore();
-      ctx.save(); ctx.globalAlpha = textAlpha * 0.9;
-      drawStrokedText(`PHASE ${phase}`, vw / 2, GH / 2 + 20, C9_LIGHT, gameMode === '2P' ? 22 : 30, '#000', 3);
-      ctx.restore();
-    }
-  }
-
-  // Speed lines during fall (phase 4+)
-  if (p.state === STATE.FALL && phase >= 4) {
-    const lineCount = Math.min(phase - 3, 4);
-    for (let i = 0; i < lineCount; i++) {
-      ctx.save(); ctx.globalAlpha = 0.15 + Math.random() * 0.15; ctx.strokeStyle = WHITE; ctx.lineWidth = 1;
-      const lx = p.nimbus.x + (Math.random()-0.5)*120; const ly = p.nimbus.y - 30;
-      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + (Math.random()-0.5)*4, ly + 20 + Math.random()*30); ctx.stroke(); ctx.restore();
-    }
-  }
-
-  // Screen pulse (phase 5+)
-  if (phase >= 5 && p.state !== STATE.PHASE_CHANGE) {
+  // Screen pulse (higher rounds)
+  if (p.round >= 5 && p.state !== STATE.ASCEND) {
     const pulse = Math.sin(performance.now() * 0.003) * 0.015;
     if (pulse > 0) { ctx.save(); ctx.globalAlpha = pulse; ctx.fillStyle = C9_BLUE; ctx.fillRect(0, 0, vw, GH); ctx.restore(); }
   }
 
-  // 2P: Game Over overlay on dead player's half
+  // 2P: Game Over overlay
   if (gameMode === '2P' && !p.alive && p.state === STATE.RESULTS) {
     ctx.save(); ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(0, 0, vw, GH);
     drawStrokedText('GAME OVER', vw / 2, GH / 2 - 20, MISS_RED, 28, '#500', 3);
     drawStrokedText(`Score: ${p.score}`, vw / 2, GH / 2 + 15, GOLD, 20, '#000', 2);
-    drawStrokedText(`Combo: ${p.combo}x`, vw / 2, GH / 2 + 40, WHITE, 16, '#000', 2);
+    drawStrokedText(`Round: ${p.round}`, vw / 2, GH / 2 + 40, WHITE, 16, '#000', 2);
     ctx.restore();
   }
 
@@ -1272,10 +1634,26 @@ function drawPlayerViewport(p, dt) {
 }
 
 function drawHUD(p, vw) {
-  if (p.state === STATE.RESULTS || p.state === STATE.READY) return;
+  if (p.state === STATE.RESULTS) return;
+  // During run start, show minimal HUD with "GO!" text
+  if (p.state === STATE.RUN_START) {
+    const fontSize = gameMode === '2P' ? 24 : 32;
+    drawStrokedText(`${p.score}`, vw / 2, 35, WHITE, fontSize, '#000', 3);
+    // "GO!" text that fades in and pulses
+    if (p.stateTimer < 1.5) {
+      const goAlpha = Math.min(1, p.stateTimer / 0.2) * Math.max(0, 1 - (p.stateTimer - 1.0) / 0.5);
+      const goScale = 1 + Math.sin(p.stateTimer * 6) * 0.1;
+      ctx.save(); ctx.globalAlpha = goAlpha;
+      ctx.translate(vw / 2, GH / 2 - 40); ctx.scale(goScale, goScale);
+      drawStrokedText(p.round > 1 ? `ROUND ${p.round}` : 'GO!', 0, 0, GOLD, gameMode === '2P' ? 36 : 48, '#5C2D00', 5);
+      ctx.restore();
+    }
+    return;
+  }
   const fontSize = gameMode === '2P' ? 24 : 32;
   drawStrokedText(`${p.score}`, vw / 2, 35, WHITE, fontSize, '#000', 3);
 
+  // Combo
   if (p.combo > 0) {
     const hudX = 65; const hudY = 45;
     const comboScale = 1 + Math.max(0, (1 - p.stateTimer * 5)) * 0.3;
@@ -1289,17 +1667,34 @@ function drawHUD(p, vw) {
     drawStrokedText('COMBO', hudX, hudY + 14, WHITE, 10, '#000', 2);
   }
 
+  // Round indicator
   const phaseX = vw - 65; const phaseY = 45;
   ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath();
   ctx.roundRect(phaseX - 45, phaseY - 22, 90, 44, 10); ctx.fill();
-  ctx.strokeStyle = phase >= 3 ? '#ff66ff' : C9_LIGHT; ctx.lineWidth = 2; ctx.stroke();
-  drawStrokedText(`${phase}`, phaseX, phaseY - 6, phase >= 4 ? MISS_RED : C9_LIGHT, 26, '#000', 3);
-  drawStrokedText('PHASE', phaseX, phaseY + 14, WHITE, 10, '#000', 2);
+  ctx.strokeStyle = p.round >= 3 ? '#ff66ff' : C9_LIGHT; ctx.lineWidth = 2; ctx.stroke();
+  drawStrokedText(`${p.round}`, phaseX, phaseY - 6, p.round >= 4 ? MISS_RED : C9_LIGHT, 26, '#000', 3);
+  drawStrokedText('ROUND', phaseX, phaseY + 14, WHITE, 10, '#000', 2);
 
+  // Cloud progress (how many clouds stomped this round)
+  const totalClouds = p.clouds.length;
+  const stompedClouds = p.currentCloudIdx;
+  if (totalClouds > 0 && p.state !== STATE.ASCEND && p.state !== STATE.BOSS_DEFEATED) {
+    const progBarW = vw - 140; const progBarH = 4;
+    const progBarX = 70; const progBarY = 72;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(progBarX, progBarY, progBarW, progBarH);
+    const pct = stompedClouds / totalClouds;
+    const gradBar = ctx.createLinearGradient(progBarX, 0, progBarX + progBarW * pct, 0);
+    gradBar.addColorStop(0, C9_LIGHT); gradBar.addColorStop(1, GOLD);
+    ctx.fillStyle = gradBar; ctx.fillRect(progBarX, progBarY, progBarW * pct, progBarH);
+    // Boss marker at end
+    ctx.fillStyle = MISS_RED; ctx.fillRect(progBarX + progBarW - 3, progBarY - 2, 6, progBarH + 4);
+  }
+
+  // Timing bar during stomp
   if (p.ringActive) {
     const barW = 100; const barH = 6;
-    const barX = vw / 2 - barW / 2; const barY = 65;
-    const windowPct = getActivationDist(p.combo) / BASE_ACTIVATION_DIST;
+    const barX = vw / 2 - barW / 2; const barY = 82;
+    const windowPct = getActivationDist(p.round) / BASE_ACTIVATION_DIST;
     ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
     const gradient = ctx.createLinearGradient(barX, 0, barX + barW * windowPct, 0);
     gradient.addColorStop(0, PERFECT_GREEN); gradient.addColorStop(0.5, GOLD); gradient.addColorStop(1, MISS_RED);
@@ -1307,6 +1702,7 @@ function drawHUD(p, vw) {
     drawStrokedText('TIMING', vw / 2, barY + 18, WHITE, 10, '#000', 2);
   }
 
+  // Beat dots
   if (musicPlaying) {
     const dotY = GH - 22; const dotSpacing = 18;
     const startX = vw / 2 - dotSpacing * 1.5;
@@ -1335,13 +1731,13 @@ function drawResultsScreen(p) {
   ctx.beginPath(); ctx.roundRect(GW / 2 - 200, centerY - 110, 400, 260, 16); ctx.fill(); ctx.stroke();
   drawStrokedText('GAME OVER', GW / 2, centerY - 80, MISS_RED, 36, '#500', 4);
   drawStrokedText(`Score: ${p.score}`, GW / 2, centerY - 35, GOLD, 28, '#000', 3);
-  drawStrokedText(`Combo: ${p.combo}`, GW / 2, centerY, WHITE, 22, '#000', 3);
-  drawStrokedText(`Phase: ${phase}`, GW / 2, centerY + 30, C9_LIGHT, 22, '#000', 3);
+  drawStrokedText(`Round: ${p.round}`, GW / 2, centerY, WHITE, 22, '#000', 3);
+  drawStrokedText(`Combo: ${p.combo}`, GW / 2, centerY + 30, C9_LIGHT, 22, '#000', 3);
   let rating = 'Try Again!'; let ratingColor = '#AAA';
-  if (p.combo >= 36) { rating = 'STORM MASTER!'; ratingColor = '#ff44ff'; }
-  else if (p.combo >= 27) { rating = 'THUNDERCLOUD!'; ratingColor = MISS_RED; }
-  else if (p.combo >= 18) { rating = 'CLOUD LEGEND!'; ratingColor = GOLD; }
-  else if (p.combo >= 9) { rating = 'CLOUD 9!'; ratingColor = PERFECT_GREEN; }
+  if (p.round >= 5) { rating = 'STORM MASTER!'; ratingColor = '#ff44ff'; }
+  else if (p.round >= 4) { rating = 'THUNDERCLOUD!'; ratingColor = MISS_RED; }
+  else if (p.round >= 3) { rating = 'CLOUD LEGEND!'; ratingColor = GOLD; }
+  else if (p.round >= 2) { rating = 'CLOUD 9!'; ratingColor = PERFECT_GREEN; }
   else if (p.combo >= 5) { rating = 'Nice Bounce!'; ratingColor = C9_LIGHT; }
   else if (p.combo >= 2) { rating = 'Getting There!'; ratingColor = '#FFA500'; }
   drawStrokedText(rating, GW / 2, centerY + 65, ratingColor, 24, '#000', 3);
@@ -1399,14 +1795,14 @@ function draw2PResultsScreen() {
   if (winner === 0) drawStrokedText('WINNER!', lx, 105, GOLD, 22, '#5C2D00', 3);
   drawStrokedText('P1', lx, 130, C9_LIGHT, 28, '#000', 3);
   drawStrokedText(`${p1.score}`, lx, 165, p1Color, 32, '#000', 3);
-  drawStrokedText(`Combo: ${p1.combo}x`, lx, 200, WHITE, 18, '#000', 2);
+  drawStrokedText(`Round: ${p1.round}`, lx, 200, WHITE, 18, '#000', 2);
 
   if (winner === 1) drawStrokedText('WINNER!', rx, 105, GOLD, 22, '#5C2D00', 3);
   drawStrokedText('P2', rx, 130, C9_LIGHT, 28, '#000', 3);
   drawStrokedText(`${p2.score}`, rx, 165, p2Color, 32, '#000', 3);
-  drawStrokedText(`Combo: ${p2.combo}x`, rx, 200, WHITE, 18, '#000', 2);
+  drawStrokedText(`Round: ${p2.round}`, rx, 200, WHITE, 18, '#000', 2);
 
-  drawStrokedText(`Phase: ${phase}`, GW / 2, 240, C9_LIGHT, 20, '#000', 2);
+  drawStrokedText(`Best Round: ${Math.max(p1.round, p2.round)}`, GW / 2, 240, C9_LIGHT, 20, '#000', 2);
 
   // VS divider
   ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1;
@@ -1484,7 +1880,7 @@ function drawTitleScreen() {
   drawStrokedText('\u2190 \u2192 to select   SPACE to start', GW / 2, selY + 30, '#ccc', 13, '#000', 2);
   ctx.restore();
 
-  drawStrokedText('Stomp the Storm Puffs!', GW / 2, GH - 70, WHITE, 16, '#000', 2);
+  drawStrokedText('Bounce through clouds to the Boss!', GW / 2, GH - 70, WHITE, 16, '#000', 2);
   drawStrokedText('One miss and it\'s game over!', GW / 2, GH - 45, '#ffcccc', 14, '#000', 2);
   ctx.save(); ctx.globalAlpha = 0.6;
   drawStrokedText('Press L for Leaderboard', GW / 2, GH - 20, '#aaa', 12, '#000', 2);
@@ -1529,7 +1925,7 @@ function drawLeaderboardScreen() {
     const hdrY = 105;
     ctx.font = `14px 'Luckiest Guy', Impact, sans-serif`; ctx.textAlign = 'center'; ctx.fillStyle = C9_LIGHT;
     ctx.fillText('RANK', 120, hdrY); ctx.fillText('NAME', 250, hdrY);
-    ctx.fillText('SCORE', 420, hdrY); ctx.fillText('COMBO', 560, hdrY); ctx.fillText('PHASE', 700, hdrY);
+    ctx.fillText('SCORE', 420, hdrY); ctx.fillText('COMBO', 560, hdrY); ctx.fillText('ROUND', 700, hdrY);
     ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(80, hdrY + 10); ctx.lineTo(GW - 80, hdrY + 10); ctx.stroke();
     for (let i = 0; i < leaderboard.length; i++) {
