@@ -2,3 +2,6 @@
 temp
 node_modules
 leaderboard.json
+promo-video/
+clips/
+*.py
