@@ -28,17 +28,12 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
      }
   }
 
+  const spinFrames = isBoy ? ASSETS.boySpinFrames : ASSETS.girlSpinFrames;
+  const charFrames = isBoy ? ASSETS.boyFrames : ASSETS.girlFrames;
   const sheet = isBoy ? ASSETS.boy : ASSETS.girl;
-  const spinSheet = isBoy ? ASSETS.boySpin : ASSETS.girlSpin;
 
-  // 1024 / 5 = 204.8 — fractional pixels cause canvas interpolation bleed.
-  // Use integer boundaries per frame to avoid sampling adjacent sprites.
-  const cols = 5;
-  const rows = 3;
   const drawW = 100;
   const drawH = 150;
-
-  const pad = 8; // generous inset to prevent bleed from neighbors
 
   let row = 0;
   let col = 0;
@@ -63,25 +58,17 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
     col = idleFrame;
   }
 
-  if (actionResult === 'perfect' && pose === 'bounce') {
-      const spinFrameCount = 5;
-      const spinFrameW = 256; // 1280 / 5 = 256 exact
+  // Disable interpolation so adjacent-frame pixels are never sampled
+  const prevSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+
+  if (actionResult === 'perfect' && pose === 'bounce' && spinFrames.length > 0) {
+      // Use pre-cleaned spin frames (alpha-thresholded, no bleed)
       const spinDuration = 500;
-      const spinFrame = Math.floor((time % spinDuration) / (spinDuration / spinFrameCount));
-
-      const sPad = 10; // larger inset to avoid transparency artifacts at edges
-
-      ctx.drawImage(
-          spinSheet,
-          spinFrame * spinFrameW + sPad,
-          sPad,
-          spinFrameW - sPad * 2,
-          256 - sPad * 2,
-          -drawW / 1.5,
-          -drawH / 1.5,
-          140,
-          140
-      );
+      const spinFrame = Math.floor((time % spinDuration) / (spinDuration / 5));
+      const frame = spinFrames[spinFrame];
+      ctx.drawImage(frame, 0, 0, frame.width, frame.height,
+          -drawW / 1.5, -drawH / 1.5, 140, 140);
   } else {
       ctx.save();
       ctx.scale(1, 0.3);
@@ -91,24 +78,24 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       ctx.fill();
       ctx.restore();
 
-      // Compute integer pixel boundaries for this frame
-      const sx = Math.round(col * 1024 / cols) + pad;
-      const sy = Math.round(row * 1024 / rows) + pad;
-      const sx2 = Math.round((col + 1) * 1024 / cols) - pad;
-      const sy2 = Math.round((row + 1) * 1024 / rows) - pad;
-
-      ctx.drawImage(
-          sheet,
-          sx,
-          sy,
-          sx2 - sx,
-          sy2 - sy,
-          -drawW / 2,
-          -drawH / 2 - 20,
-          drawW,
-          drawH
-      );
+      if (charFrames.length > 0 && charFrames[row]) {
+          // Use pre-extracted frame canvas (no fractional boundary bleed)
+          const frame = charFrames[row][col];
+          ctx.drawImage(frame, 0, 0, frame.width, frame.height,
+              -drawW / 2, -drawH / 2 - 20, drawW, drawH);
+      } else {
+          // Fallback: raw spritesheet (before frames are prepared)
+          const cols = 5, rows = 3, pad = 12;
+          const sx = Math.floor(col * 1024 / cols) + pad;
+          const sy = Math.floor(row * 1024 / rows) + pad;
+          const sx2 = Math.floor((col + 1) * 1024 / cols) - pad;
+          const sy2 = Math.floor((row + 1) * 1024 / rows) - pad;
+          ctx.drawImage(sheet, sx, sy, sx2 - sx, sy2 - sy,
+              -drawW / 2, -drawH / 2 - 20, drawW, drawH);
+      }
   }
+
+  ctx.imageSmoothingEnabled = prevSmoothing;
   ctx.restore();
 }
 

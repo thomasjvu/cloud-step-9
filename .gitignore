@@ -1,2 +1,4 @@
 .claude
 temp
+node_modules
+leaderboard.json

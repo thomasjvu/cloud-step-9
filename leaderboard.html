@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud Step 9 — Live Leaderboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a1a;
+    font-family: 'Luckiest Guy', Impact, sans-serif;
+    color: #fff;
+    min-height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .bg-clouds {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+  }
+  .bg-cloud {
+    position: absolute;
+    background: radial-gradient(ellipse, rgba(91,200,245,0.08) 0%, transparent 70%);
+    border-radius: 50%;
+    animation: float-cloud linear infinite;
+  }
+  @keyframes float-cloud {
+    from { transform: translateX(100vw); }
+    to   { transform: translateX(-300px); }
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 900px;
+    padding: 30px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+  }
+
+  .header {
+    text-align: center;
+    margin-bottom: 10px;
+  }
+  .logo {
+    font-size: 18px;
+    color: #009EE2;
+    opacity: 0.6;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+  .title {
+    font-size: 52px;
+    color: #FFD700;
+    text-shadow: 0 0 20px rgba(255,215,0,0.3), 3px 3px 0 #5C2D00;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    font-size: 20px;
+    color: #5BC8F5;
+    text-shadow: 2px 2px 0 #003366;
+    margin-top: 4px;
+  }
+  .live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,68,68,0.15);
+    border: 1px solid rgba(255,68,68,0.4);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 13px;
+    color: #FF4444;
+    margin-top: 10px;
+    letter-spacing: 1px;
+  }
+  .live-dot {
+    width: 8px;
+    height: 8px;
+    background: #FF4444;
+    border-radius: 50%;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.8); }
+  }
+
+  .board {
+    width: 100%;
+    margin-top: 20px;
+    flex: 1;
+  }
+  .board-header {
+    display: grid;
+    grid-template-columns: 70px 1fr 120px 100px 100px;
+    padding: 12px 20px;
+    font-size: 14px;
+    color: #5BC8F5;
+    letter-spacing: 1px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .board-header span:not(:first-child) {
+    text-align: center;
+  }
+
+  .board-row {
+    display: grid;
+    grid-template-columns: 70px 1fr 120px 100px 100px;
+    padding: 14px 20px;
+    font-size: 22px;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: all 0.5s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .board-row.new-entry {
+    animation: slide-in 0.6s ease-out, glow 1.5s ease-out;
+  }
+  @keyframes slide-in {
+    from { transform: translateX(60px); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
+  @keyframes glow {
+    0%   { background: rgba(255,215,0,0.25); }
+    100% { background: transparent; }
+  }
+
+  .board-row span:not(:first-child) {
+    text-align: center;
+  }
+
+  .rank {
+    font-size: 28px;
+  }
+  .rank-1 { color: #FFD700; text-shadow: 0 0 12px rgba(255,215,0,0.4); }
+  .rank-2 { color: #C0C0C0; text-shadow: 0 0 8px rgba(192,192,192,0.3); }
+  .rank-3 { color: #CD7F32; text-shadow: 0 0 8px rgba(205,127,50,0.3); }
+  .rank-default { color: #aaa; }
+
+  .player-name {
+    font-size: 26px;
+    letter-spacing: 3px;
+  }
+  .score-val {
+    color: #FFD700;
+  }
+  .combo-val {
+    color: #5BC8F5;
+  }
+  .round-val {
+    color: #3DF53D;
+  }
+
+  .empty-state {
+    text-align: center;
+    margin-top: 80px;
+  }
+  .empty-state .big {
+    font-size: 36px;
+    color: #444;
+    margin-bottom: 12px;
+  }
+  .empty-state .small {
+    font-size: 18px;
+    color: #333;
+  }
+
+  .footer {
+    text-align: center;
+    padding: 16px;
+    font-size: 13px;
+    color: #333;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Ambient background clouds -->
+<div class="bg-clouds" id="bgClouds"></div>
+
+<div class="container">
+  <div class="header">
+    <div class="logo">&#9729; CLOUD9</div>
+    <div class="title">LEADERBOARD</div>
+    <div class="subtitle">Cloud Step 9</div>
+    <div class="live-badge"><span class="live-dot"></span> LIVE</div>
+  </div>
+
+  <div class="board" id="board">
+    <div class="board-header">
+      <span>RANK</span>
+      <span>NAME</span>
+      <span>SCORE</span>
+      <span>COMBO</span>
+      <span>ROUND</span>
+    </div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="footer">Open the game on another screen &mdash; scores update in real time</div>
+</div>
+
+<script>
+// ── Background clouds ────────────────────────────────────
+(function initBgClouds() {
+  const container = document.getElementById('bgClouds');
+  for (let i = 0; i < 6; i++) {
+    const cloud = document.createElement('div');
+    cloud.className = 'bg-cloud';
+    const size = 120 + Math.random() * 200;
+    cloud.style.width = size + 'px';
+    cloud.style.height = (size * 0.5) + 'px';
+    cloud.style.top = (Math.random() * 100) + '%';
+    cloud.style.animationDuration = (20 + Math.random() * 30) + 's';
+    cloud.style.animationDelay = (-Math.random() * 40) + 's';
+    container.appendChild(cloud);
+  }
+})();
+
+// ── Leaderboard state ────────────────────────────────────
+let currentBoard = [];
+let previousTimestamps = new Set();
+
+function loadFromStorage() {
+  try {
+    const data = localStorage.getItem('cloud_step_9_lb');
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function renderBoard(board, highlightNew) {
+  const rows = document.getElementById('rows');
+
+  if (!board || board.length === 0) {
+    rows.innerHTML =
+      '<div class="empty-state">' +
+      '<div class="big">No scores yet!</div>' +
+      '<div class="small">Play Cloud Step 9 to get on the board</div>' +
+      '</div>';
+    return;
+  }
+
+  // Find new entries by timestamp
+  const newTimestamps = new Set();
+  if (highlightNew) {
+    board.forEach(e => {
+      if (e.timestamp && !previousTimestamps.has(e.timestamp)) {
+        newTimestamps.add(e.timestamp);
+      }
+    });
+  }
+
+  let html = '';
+  for (let i = 0; i < board.length; i++) {
+    const e = board[i];
+    const rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-default';
+    const isNew = newTimestamps.has(e.timestamp);
+    html +=
+      '<div class="board-row' + (isNew ? ' new-entry' : '') + '">' +
+      '<span class="rank ' + rankClass + '">' + (i + 1) + '</span>' +
+      '<span class="player-name">' + escapeHtml(e.name || '???') + '</span>' +
+      '<span class="score-val">' + (e.score || 0) + '</span>' +
+      '<span class="combo-val">' + (e.combo || 0) + 'x</span>' +
+      '<span class="round-val">' + (e.phase || 1) + '</span>' +
+      '</div>';
+  }
+  rows.innerHTML = html;
+
+  // Update tracked timestamps
+  previousTimestamps = new Set(board.filter(e => e.timestamp).map(e => e.timestamp));
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ── Live updates via SSE (Server-Sent Events) ────────────
+function connectSSE() {
+  const es = new EventSource('/api/leaderboard/stream');
+  es.onmessage = function(event) {
+    try {
+      const board = JSON.parse(event.data);
+      currentBoard = board;
+      renderBoard(currentBoard, true);
+    } catch (e) {}
+  };
+  es.onerror = function() {
+    // If SSE fails, fall back to polling
+    es.close();
+    startPolling();
+  };
+}
+
+// ── Fallback: poll server (or localStorage) every 2s ─────
+function startPolling() {
+  setInterval(async function() {
+    let fresh;
+    try {
+      const res = await fetch('/api/leaderboard');
+      if (res.ok) fresh = await res.json();
+    } catch (e) {}
+    if (!fresh) fresh = loadFromStorage();
+    const freshJSON = JSON.stringify(fresh);
+    const currentJSON = JSON.stringify(currentBoard);
+    if (freshJSON !== currentJSON) {
+      currentBoard = fresh;
+      renderBoard(currentBoard, true);
+    }
+  }, 2000);
+}
+
+// ── Initial load ─────────────────────────────────────────
+(async function init() {
+  try {
+    const res = await fetch('/api/leaderboard');
+    if (res.ok) currentBoard = await res.json();
+  } catch (e) {
+    currentBoard = loadFromStorage();
+  }
+  previousTimestamps = new Set(currentBoard.filter(e => e.timestamp).map(e => e.timestamp));
+  renderBoard(currentBoard, false);
+  connectSSE();
+})();
+</script>
+</body>
+</html>
