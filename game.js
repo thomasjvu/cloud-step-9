@@ -20,6 +20,7 @@ const ASSETS = {
   cloud: new Image(),
   rainCloud: new Image(),
   thunderCloud: new Image(),
+  cloudNoFace: new Image(),
 };
 
 let assetsLoaded = 0;
@@ -33,6 +34,7 @@ function loadImages() {
   ASSETS.cloud.src = "sprites/cloud_spritesheet.png";
   ASSETS.rainCloud.src = "sprites/rain_cloud_perfect.png";
   ASSETS.thunderCloud.src = "sprites/thunder_cloud_perfect.png";
+  ASSETS.cloudNoFace.src = "sprites/cloud_no_face.png";
 }
 loadImages();
 
@@ -374,11 +376,17 @@ const STATE = {
   BOSS_DEFEATED: 10,
   ASCEND: 11,
   RESULTS: 12,
+  CHAR_SELECT: 13,
 };
 
 // Global state (title/keybind only during gameplay)
 let state = STATE.TITLE;
 let phase = 1;
+
+// Character Selection State
+let charSelectStage = 0; // 0=P1, 1=P2
+let p1Char = 0; // 0=Girl, 1=Boy
+let p2Char = 1; // Default P2 is Boy
 
 // ── Game constants ────────────────────────────────────────────────
 const GROUND_Y = 420;
@@ -858,36 +866,35 @@ function calculateScore(isPerfect, round) {
   return Math.floor(100 * phaseMult * accuracyBonus);
 }
 function getRoundBPM(round) {
-  if (round <= 1) return 105;
-  if (round === 2) return 125;
-  if (round === 3) return 145;
-  if (round === 4) return 185;
-  if (round === 5) return 230;
-  return Math.min(300, 230 + (round - 5) * 12);
+  // MUCH more aggressive BPM progression - round 2 should feel intense!
+  const baseBPM = 180;
+  const bpmPerRound = round <= 3 ? 35 : 20; // HUGE jumps early, then moderate
+  return Math.min(300, baseBPM + (round - 1) * bpmPerRound);
 }
 function getCloudCount(round) {
   return 4 + Math.min(round, 6);
 }
 function getCloudSpacing(round) {
-  return Math.max(100, 180 - (round - 1) * 10);
+  return Math.max(80, 180 - (round - 1) * 20); // Even tighter, faster
 }
 // Jump velocity and gravity scale with round — big floaty jumps early, tighter later
 function getJumpVelocity(round) {
-  // Steeper scaling for more difficulty
-  return -(16 - Math.min(round - 1, 6) * 1.2); 
+  // Massive early scaling for noticeable difficulty
+  return -(19 - Math.min(round - 1, 6) * 2.5); 
 }
 function getBounceVelocity(round, combo) {
-  const base = 13 - Math.min(round - 1, 6) * 0.6; // Reduced from 16 to match jump better
+  const base = 16 - Math.min(round - 1, 6) * 1.5; // Even faster scaling
   return -(base + Math.min(combo * 0.12, 2));
 }
 function getGravity(round) {
-  return 0.65 + Math.min(round - 1, 8) * 0.06; // 0.65 -> 1.13 (steeper)
+  // Round 1: 0.80, Round 2: 1.00, Round 3: 1.20, etc - VERY noticeable!
+  return 0.80 + Math.min(round - 1, 8) * 0.20; 
 }
 function getFallGravity(round) {
-  return 0.4 + Math.min(round - 1, 8) * 0.04; // slightly heavier on the way down
+  return 0.55 + Math.min(round - 1, 8) * 0.08; 
 }
 function getBounceGravity(round) {
-  return 0.3 + Math.min(round - 1, 8) * 0.035; // lighter bounce for more hang time
+  return 0.35 + Math.min(round - 1, 8) * 0.05; 
 }
 
 // ── Run platform generation (runway before stomp chain) ─────────
@@ -920,9 +927,15 @@ function generateCloudChain(startX, round) {
   // Platform clouds (1 HP each, no face)
   for (let i = 0; i < count; i++) {
     const yOff = (Math.random() - 0.5) * 40;
+    
+    // Last 3 clouds before boss: tighter spacing + higher
+    const isBossApproach = i >= count - 3;
+    const adjustedSpacing = isBossApproach ? spacing * 0.6 : spacing; // 40% tighter
+    const heightBonus = isBossApproach ? -30 - (count - i) * 15 : 0; // Higher as you get closer
+    
     clouds.push({
       x: cx,
-      y: GROUND_Y + yOff,
+      y: GROUND_Y + yOff + heightBonus,
       hp: 1,
       maxHp: 1,
       type,
@@ -932,10 +945,10 @@ function generateCloudChain(startX, round) {
       scale: 0.8 + Math.random() * 0.3,
       defeated: false,
     });
-    cx += spacing + Math.random() * 60;
+    cx += adjustedSpacing + Math.random() * 60;
   }
   // Boss cloud (9 HP, with face, bigger)
-  cx += spacing * 0.5;
+  cx += spacing * 0.25; // Tighter gap (25%)
   const bossScale = gameMode === "2P" ? 1.8 : 2.5;
   clouds.push({
     x: cx,
@@ -953,20 +966,40 @@ function generateCloudChain(startX, round) {
 }
 
 // ── Procedural drawing: Player (Replaced with Sprites) ────────────
-function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretchY, playerIndex = 0, actionResult = '') {
+function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretchY, playerIndex = 0, actionResult = '', charType = -1) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rot);
   ctx.scale(scale * stretchX, scale * stretchY);
 
-  const isBoy = playerIndex === 1; // 0=Girl, 1=Boy
+  // If charType passed explicitly (e.g. menu), use it. otherwise use derived.
+  // BUT: logic below uses playerIndex to decide isBoy? 
+  // We need to support the new charType prop.
+  
+  let isBoy = false;
+  if (charType !== -1) {
+     isBoy = (charType === 1);
+  } else {
+     // During gameplay `players` exists. 
+     // But drawPlayer is sometimes called without player context?
+     // We need to look up player if possible
+     if (players[playerIndex]) {
+        isBoy = (players[playerIndex].charType === 1);
+     } else {
+        isBoy = (playerIndex === 1); // Fallback for legacy calls
+     }
+  }
+  
   const sheet = isBoy ? ASSETS.boy : ASSETS.girl;
   const spinSheet = isBoy ? ASSETS.boySpin : ASSETS.girlSpin;
 
-  const frameW = 1024 / 5;
-  const frameH = 1024 / 3;
-  const drawW = 100;
-  const drawH = 150;
+  // Updated to match new 256x256 normalized spritesheets
+  const frameW = 256; 
+  const frameH = 256;
+  
+  // Draw larger on screen to look good
+  const drawW = 140; 
+  const drawH = 140;
   
   // INSET to avoid bleeding
   // 20px was too much (cut off limbs). 
@@ -1043,7 +1076,7 @@ function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretchY, play
 }
 
 // ── Procedural drawing: Cloud Puff (no face — same shape as Storm Puff) ──
-function drawCloudPuff(x, y, type = 0, squish = 0, flash = 0, scale = 1, isPerfect = false) {
+function drawCloudPuff(x, y, type = 0, squish = 0, flash = 0, scale = 1, isPerfect = false, noFaceNoShadow = false) {
   ctx.save();
   ctx.translate(x, y);
   const squishScale = 1 - squish * 0.25;
@@ -1058,7 +1091,11 @@ function drawCloudPuff(x, y, type = 0, squish = 0, flash = 0, scale = 1, isPerfe
   let source = ASSETS.cloud;
   let sx = 0; let sy = 0;
   
-  if (type < 2) {
+  // Running clouds always use default kawaii face (type 0, frame 0)
+  if (noFaceNoShadow) {
+    source = ASSETS.cloudNoFace;
+    sx = 0; sy = 0; // Default kawaii face
+  } else if (type < 2) {
      source = ASSETS.cloud;
      sy = 0;
      sx = (squish > 0.1) ? 512 : 0; 
@@ -1080,9 +1117,11 @@ function drawCloudPuff(x, y, type = 0, squish = 0, flash = 0, scale = 1, isPerfe
      }
   }
 
-  // Shadow
-  ctx.save(); ctx.globalAlpha = 0.15; ctx.fillStyle = '#000';
-  ctx.beginPath(); ctx.ellipse(0, 25, 30, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  // Shadow (skip for running clouds)
+  if (!noFaceNoShadow) {
+    ctx.save(); ctx.globalAlpha = 0.15; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(0, 25, 30, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
 
   if (flash > 0.3) {
       ctx.globalCompositeOperation = 'source-atop';
@@ -1665,7 +1704,9 @@ function updatePlayer(p, dt) {
       p.nimbus.stretchY = 0.75;
       p.state = STATE.BOUNCE_UP;
       p.stateTimer = 0;
-      p.nimbus.vy = getBounceVelocity(p.round, p.combo);
+      // Bounce velocity - reduced for boss to make it harder
+      const baseVelocity = getBounceVelocity(p.round, p.combo);
+      p.nimbus.vy = cloud.isBoss ? baseVelocity * 0.7 : baseVelocity; // 30% less bounce on boss
       if (isPerfect && lastStompOnBeat) {
         p.nimbus.isFlipping = true;
         p.nimbus.flipAngle = 0;
@@ -1794,11 +1835,19 @@ function updatePlayer(p, dt) {
       p.nimbus.pose = "bounce";
       const prog = Math.min(1, p.stateTimer / 2.0);
       if (bossCloud) {
-        bossCloud.y = GROUND_Y + prog * 200;
-        bossCloud.squish = prog * 0.5;
+        // Transform boss to kawaii cloud
+        bossCloud.isBoss = false; // Show kawaii face instead of boss
+        bossCloud.type = 0; // Ensure it looks like a normal kawaii cloud
+        bossCloud.x = p.cameraX + vw / 2; // Center on screen!
+        bossCloud.y = GROUND_Y - 20; // Slightly above ground
+        bossCloud.squish = Math.sin(prog * Math.PI) * 0.3; // Bounce effect
+        bossCloud.defeated = false; // IMPORTANT: Keep it visible!
       }
-      p.nimbus.y = GROUND_Y - 80 - Math.sin(prog * Math.PI) * 60;
-      if (prog < 0.5 && Math.random() < 0.4) spawnStarsP(p, vw / 2, GH / 2, 2);
+      // Boss cloud shoots player upward in celebration
+      p.nimbus.y = GROUND_Y - 80 - prog * 200; // Shoot up higher
+      p.nimbus.vy = -12; // Faster upward velocity
+      // Removed spawnStarsP to fix "spinning wheel" artifact
+      
       if (p.stateTimer >= 2.0) {
         p.state = STATE.ASCEND;
         p.stateTimer = 0;
@@ -1811,10 +1860,12 @@ function updatePlayer(p, dt) {
       p.nimbus.expression = "excited";
       p.nimbus.pose = "jump_up";
       const prog = Math.min(1, p.stateTimer / 1.5);
-      const easeOut = 1 - Math.pow(1 - prog, 3);
-      // More speed lines for dramatic B&W effect
-      const lineCount = prog < 0.4 ? 3 : prog < 0.8 ? 5 : 2;
+      
+      // Speed lines: Faster and more of them!
+      const lineCount = prog < 0.4 ? 8 : prog < 0.8 ? 15 : 5; 
       spawnSpeedLinesP(p, lineCount);
+      
+      const easeOut = 1 - Math.pow(1 - prog, 3);
       p.phaseSpeedLines = p.phaseSpeedLines.filter((l) => {
         l.y += l.speed;
         return l.y < GH + 100;
@@ -1957,7 +2008,7 @@ function drawPlayerViewport(p, dt) {
       p.runPlatform.forEach((rc) => {
         const screenX = rc.x - p.cameraX;
         if (screenX < -80 || screenX > vw + 80) return;
-        drawCloudPuff(rc.x, rc.y, rc.type, 0, 0, rc.scale, false);
+        drawCloudPuff(rc.x, rc.y, rc.type, 0, 0, rc.scale, false, true); // noFaceNoShadow = true
       });
     }
 
