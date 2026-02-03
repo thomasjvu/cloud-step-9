@@ -54,233 +54,309 @@ const SKY_THEMES = [
 ];
 
 // ── Audio ─────────────────────────────────────────────────────────
-let audioCtx;
-function initAudio() {
-  if (!audioCtx)
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-}
+// ── Cloud9 EDM Synth Engine ──────────────────────────────────────
+const Audio = {
+  ctx: null,
+  master: null,
+  compressor: null, // For sidechain ducking
+  init: function() {
+    if (this.ctx) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.5; // Master volume
+    
+    // Global Compressor for glue
+    this.compressor = this.ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -10;
+    this.compressor.knee.value = 30;
+    this.compressor.ratio.value = 12;
+    this.compressor.attack.value = 0.003;
+    this.compressor.release.value = 0.25;
+    
+    this.master.connect(this.compressor);
+    this.compressor.connect(this.ctx.destination);
+  },
 
-function playTone(freq, dur, type = "square", vol = 0.12) {
-  if (!audioCtx) return;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-  gain.gain.setValueAtTime(vol, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  osc.start();
-  osc.stop(audioCtx.currentTime + dur);
-}
+  // ── Instruments ──
 
-function playNoise(dur, vol = 0.06) {
-  if (!audioCtx) return;
-  const bufSize = audioCtx.sampleRate * dur;
-  const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  const gain = audioCtx.createGain();
-  gain.gain.setValueAtTime(vol, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-  src.connect(gain);
-  gain.connect(audioCtx.destination);
-  src.start();
-}
+  playKick: function(time) {
+    if (!this.ctx) return;
+    const t = time || this.ctx.currentTime;
+    // Kawaii Pop Kick (higher, cuter)
+    const osc = this.ctx.createOscillator();
+    osc.type = "sine"; // Rounder sound
+    osc.frequency.setValueAtTime(200, t); // Higher pitch
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.06);
+    
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(1.0, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12); // Shorter
+    
+    osc.connect(gain);
+    gain.connect(this.master);
+    osc.start(t); osc.stop(t + 0.12);
+  },
 
-function sfxJump() {
-  playTone(440, 0.12, "sine");
-  setTimeout(() => playTone(660, 0.1, "sine"), 60);
-}
-function sfxStomp() {
-  playTone(200, 0.15, "square", 0.15);
-  playNoise(0.08, 0.1);
-  setTimeout(() => playTone(300, 0.08, "square", 0.1), 30);
-}
-function sfxPerfect() {
-  playTone(784, 0.1, "sine", 0.15);
-  setTimeout(() => playTone(988, 0.1, "sine", 0.15), 80);
-  setTimeout(() => playTone(1175, 0.15, "sine", 0.15), 160);
-}
-function sfxBounce() {
-  playTone(520, 0.08, "sine");
-  setTimeout(() => playTone(780, 0.1, "sine"), 50);
-}
-function sfxMiss() {
-  playTone(300, 0.2, "sawtooth", 0.1);
-  setTimeout(() => playTone(200, 0.3, "sawtooth", 0.08), 100);
-}
-function sfxCloud9() {
-  const notes = [523, 659, 784, 1047, 1319];
-  notes.forEach((f, i) =>
-    setTimeout(() => playTone(f, 0.2, "sine", 0.15), i * 80),
-  );
-}
-function sfxStart() {
-  playTone(440, 0.1, "sine");
-  setTimeout(() => playTone(554, 0.1, "sine"), 100);
-  setTimeout(() => playTone(659, 0.15, "sine"), 200);
-}
-function sfxPhaseUp() {
-  playTone(400, 0.15, "square", 0.1);
-  setTimeout(() => playTone(600, 0.15, "square", 0.1), 120);
-  setTimeout(() => playTone(800, 0.2, "square", 0.12), 240);
-}
-function sfxSelect() {
-  playTone(600, 0.08, "sine", 0.1);
-}
+  playSnare: function(time) {
+    if (!this.ctx) return;
+    const t = time || this.ctx.currentTime;
+    // Clap / Snap sound
+    const bufSize = this.ctx.sampleRate * 0.1; 
+    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1);
+    
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buf;
+    
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 1200;
+    
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.6, t);
+    // Envelope simulates multiple claps? Simplified here
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.master);
+    noise.start(t);
+  },
 
-// ── Procedural Music System ──────────────────────────────────────
-const PENTA_C = [262, 294, 330, 392, 440];
-const MELODY_PATTERN = [0, 2, 4, 3, 4, 2, 1, 0, 2, 4, 3, 2, 0, 1, 2, 4];
-const BASS_BEATS = [0, 4, 8, 12];
+  playHiHat: function(time, open = false) {
+    if (!this.ctx) return;
+    const t = time || this.ctx.currentTime;
+    
+    // Kawaii Bell Hi-Hat (triangle wave for metallic "ting")
+    const osc = this.ctx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(open ? 3000 : 4000, t); // Very high pitch
+    
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + (open ? 0.15 : 0.03));
+    
+    osc.connect(gain);
+    gain.connect(this.master);
+    osc.start(t);
+    osc.stop(t + (open ? 0.15 : 0.03));
+  },
+
+  playBass: function(freq, time, len) {
+    if (!this.ctx) return;
+    const t = time || this.ctx.currentTime;
+    // Kawaii "Donk" Bass with pitch wobble
+    const osc = this.ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(freq, t);
+    // Pitch wobble (kawaii bounce effect)
+    osc.frequency.linearRampToValueAtTime(freq * 1.05, t + 0.05);
+    osc.frequency.linearRampToValueAtTime(freq, t + 0.1);
+    
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(freq * 4, t);
+    filter.frequency.exponentialRampToValueAtTime(freq * 1.2, t + 0.1);
+    
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.6, t); // Louder
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25); // Longer tail
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.master);
+    osc.start(t); osc.stop(t + 0.25);
+  },
+
+  // Cowbell for extra kawaii percussion
+  playBell: function(time) {
+    if (!this.ctx) return;
+    const t = time || this.ctx.currentTime;
+    
+    // Two triangle waves for metallic "bonk"
+    const freq1 = 800;
+    const freq2 = 540;
+    
+    const osc1 = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    osc1.type = "triangle";
+    osc2.type = "triangle";
+    osc1.frequency.value = freq1;
+    osc2.frequency.value = freq2;
+    
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    
+    osc1.connect(gain);
+    osc2.connect(gain);
+    gain.connect(this.master);
+    
+    osc1.start(t); osc2.start(t);
+    osc1.stop(t + 0.1); osc2.stop(t + 0.1);
+  },
+
+  playSuperSaw: function(freq, time, len) {
+    if (!this.ctx) return;
+    const t = time || this.ctx.currentTime;
+    
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.2, t + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + len);
+    gain.connect(this.master);
+    
+    // Kawaii Triangle Lead with vibrato
+    const osc = this.ctx.createOscillator();
+    osc.type = "triangle"; // Softer, cuter sound
+    osc.frequency.setValueAtTime(freq * 2, t); // Octave up for cuteness
+    
+    // Vibrato LFO
+    const lfo = this.ctx.createOscillator();
+    lfo.frequency.value = 6; // 6 Hz vibrato
+    const lfoGain = this.ctx.createGain();
+    lfoGain.gain.value = 8; // Vibrato depth in Hz
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+    
+    osc.connect(gain);
+    lfo.start(t);
+    osc.start(t);
+    lfo.stop(t + len);
+    osc.stop(t + len);
+  }
+};
+
+// Compatibility shim for old sfx calls
+function initAudio() { Audio.init(); }
+function playTone(f,d,t,v) { 
+  if(!Audio.ctx) return;
+  const o = Audio.ctx.createOscillator(); 
+  const g = Audio.ctx.createGain();
+  o.type = t || "sine";
+  o.frequency.setValueAtTime(f, Audio.ctx.currentTime);
+  g.gain.setValueAtTime(v||0.1, Audio.ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, Audio.ctx.currentTime + d);
+  o.connect(g); g.connect(Audio.master); o.start(); o.stop(Audio.ctx.currentTime+d);
+}
+// SFX Wrappers
+function sfxJump() { playTone(440, 0.1, "sine", 0.3); playTone(880, 0.15, "sine", 0.2); }
+function sfxStomp() { Audio.playKick(); playTone(200, 0.1, "square", 0.2); }
+function sfxPerfect() { Audio.playSuperSaw(880, Audio.ctx.currentTime, 0.3); Audio.playSuperSaw(1100, Audio.ctx.currentTime+0.1, 0.4); }
+function sfxBounce() { Audio.playBass(220, Audio.ctx.currentTime, 0.3); }
+function sfxMiss() { playTone(150, 0.4, "sawtooth", 0.3); playTone(100, 0.4, "sawtooth", 0.3); }
+function sfxCloud9() { 
+  [523,659,784,1047,1319].forEach((f,i) => setTimeout(()=>Audio.playSuperSaw(f,Audio.ctx.currentTime, 0.4), i*100)); 
+}
+function sfxStart() { Audio.playSuperSaw(440, Audio.ctx.currentTime, 0.5); }
+function sfxPhaseUp() { 
+    if(!Audio.ctx) return;
+    const o = Audio.ctx.createOscillator();
+    const g = Audio.ctx.createGain();
+    o.frequency.setValueAtTime(220, Audio.ctx.currentTime);
+    o.frequency.linearRampToValueAtTime(880, Audio.ctx.currentTime+1.0);
+    g.gain.value = 0.2;
+    g.gain.linearRampToValueAtTime(0, Audio.ctx.currentTime+1.0);
+    o.connect(g); g.connect(Audio.master); o.start(); o.stop(Audio.ctx.currentTime+1);
+}
+function sfxSelect() { playTone(880, 0.05, "triangle", 0.1); }
+
+
+// ── EDM Sequencer (Happy Hardcore / Chibi) ─────────────────────
+// 180 BPM
+const PENTA_C = [261.63, 293.66, 329.63, 392.00, 440.00]; // Middle C range
+const MELODY_PATTERN = [0, 2, 4, 2, 4, 3, 2, 1, 0, 2, 4, 3, 2, 0, 1, 0]; // Fixed: only uses 0-4
 
 let musicPlaying = false;
-let musicBPM = 120;
+let musicBPM = 180;
 let musicBeat = 0;
-let musicInterval = null;
-let musicGainNode = null;
-let lastBeatTime = 0;
-let beatInterval = 0;
+let nextNoteTime = 0;
+let musicTimerID = null;
+let lastStompOnBeat = false;
 let beatPulse = 0;
 let rhythmBonusText = 0;
-let lastStompOnBeat = false;
 
 function startMusic() {
-  if (!audioCtx || musicPlaying) return;
+  if (!Audio.ctx || musicPlaying) return;
+  Audio.ctx.resume();
   musicPlaying = true;
   musicBeat = 0;
-  musicBPM = getMusicBPM();
-  beatInterval = 60 / musicBPM;
-  lastBeatTime = audioCtx.currentTime;
-  beatPulse = 0;
-  musicGainNode = audioCtx.createGain();
-  musicGainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
-  musicGainNode.connect(audioCtx.destination);
-  const beatMs = 60000 / musicBPM;
-  musicInterval = setInterval(() => {
-    if (!musicPlaying) return;
-    lastBeatTime = audioCtx.currentTime;
-    beatPulse = 1;
-    playMusicBeat(musicBeat);
-    musicBeat = (musicBeat + 1) % 16;
-  }, beatMs);
+  nextNoteTime = Audio.ctx.currentTime + 0.1;
+  scheduler();
 }
 
 function stopMusic() {
   musicPlaying = false;
-  if (musicInterval) {
-    clearInterval(musicInterval);
-    musicInterval = null;
-  }
-  musicGainNode = null;
-  beatPulse = 0;
+  clearTimeout(musicTimerID);
 }
 
-function getMusicBPM() {
-  return getRoundBPM(phase);
-}
-
-function updateMusicTempo() {
+function scheduler() {
   if (!musicPlaying) return;
+  // Lookahead 0.1s
+  while (nextNoteTime < Audio.ctx.currentTime + 0.1) {
+    scheduleBeat(musicBeat, nextNoteTime);
+    nextNoteTime += (60.0 / musicBPM) / 4; // 16th notes
+    musicBeat = (musicBeat + 1) % 64; // 4 bars of 16ths
+  }
+  musicTimerID = setTimeout(scheduler, 25);
+}
+
+function scheduleBeat(beat16, time) {
+    const step = beat16 % 16;
+    
+    const isKick = (step % 4 === 0);
+    const isSnare = (step % 8 === 4); // Claps on 2 and 4
+    
+    if (isKick) beatPulse = 1;
+    if (isKick) Audio.playKick(time);
+    if (isSnare) Audio.playSnare(time);
+    
+    // Bouncy Offbeat Bass "Donk"
+    // on the "and"s: 2, 6, 10, 14
+    if (step % 4 === 2) {
+        Audio.playBass(PENTA_C[0] / 2, time, 0.2);
+    }
+    
+    // Bell Hi-hats - More frequent for kawaii energy
+    if (step % 2 !== 0) {
+        Audio.playHiHat(time, false);
+    }
+    // Open hat on every 4th offbeat
+    if (step === 3 || step === 11) {
+        Audio.playHiHat(time, true);
+    }
+    
+    // Cowbell accent on strong beats
+    if (step === 0 && (beat16 % 32 === 0 || beat16 % 32 === 16)) {
+        Audio.playBell(time);
+    }
+    
+    // Happy Melody
+    // Arpeggiator on 8th notes
+    if (step % 2 === 0) {
+        const noteIdx = MELODY_PATTERN[Math.floor(beat16/2)%16];
+        const freq = PENTA_C[noteIdx] * (phase >= 3 ? 2 : 1);
+        
+        // Always play melody for "happy" vibe
+        if (phase >= 1) Audio.playSuperSaw(freq, time, 0.15);
+    }
+}
+
+function getMusicBPM() { 
+  // BPM increases with phase: 180 @ phase 1 -> 220 @ phase 5+
+  return Math.min(220, 180 + (phase - 1) * 10);
+}
+function updateMusicTempo() { 
   musicBPM = getMusicBPM();
-  beatInterval = 60 / musicBPM;
-  if (musicInterval) clearInterval(musicInterval);
-  const beatMs = 60000 / musicBPM;
-  musicInterval = setInterval(() => {
-    if (!musicPlaying) return;
-    lastBeatTime = audioCtx.currentTime;
-    beatPulse = 1;
-    playMusicBeat(musicBeat);
-    musicBeat = (musicBeat + 1) % 16;
-  }, beatMs);
 }
 
 function getBeatAccuracy() {
-  if (!audioCtx || !musicPlaying || beatInterval <= 0) return 0;
-  const now = audioCtx.currentTime;
-  const timeSinceBeat = now - lastBeatTime;
-  const distToNearest = Math.min(
-    timeSinceBeat % beatInterval,
-    beatInterval - (timeSinceBeat % beatInterval),
-  );
-  const window = beatInterval * 0.25;
-  if (distToNearest <= window) return 1 - distToNearest / window;
-  return 0;
-}
-
-function playMusicNote(freq, dur, type, vol, detune = 0) {
-  if (!audioCtx) return;
-  const now = audioCtx.currentTime;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, now);
-  if (detune) osc.detune.setValueAtTime(detune, now);
-  gain.gain.setValueAtTime(0.001, now);
-  gain.gain.linearRampToValueAtTime(vol, now + 0.01);
-  gain.gain.exponentialRampToValueAtTime(vol * 0.4, now + dur * 0.3);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-  osc.connect(gain);
-  if (musicGainNode) {
-    gain.connect(musicGainNode);
-  } else {
-    gain.connect(audioCtx.destination);
-  }
-  osc.start(now);
-  osc.stop(now + dur);
-}
-
-function playMusicBeat(beat) {
-  if (!audioCtx) return;
-  const beatDur = 60 / musicBPM;
-  if (phase >= 2) {
-    playNoise(0.04, 0.015 + Math.min(phase - 1, 4) * 0.005);
-  } else if (BASS_BEATS.includes(beat)) {
-    playNoise(0.03, 0.01);
-  }
-  if (phase >= 2 && BASS_BEATS.includes(beat)) {
-    const kickVol = 0.06 + Math.min(phase - 2, 3) * 0.025;
-    playMusicNote(65, 0.12, "sine", kickVol);
-  }
-  if (phase >= 2 && BASS_BEATS.includes(beat)) {
-    const bassFreq = PENTA_C[0] / 2;
-    const bassDur = beatDur * 0.8;
-    const bassVol = 0.04 + Math.min(phase - 2, 3) * 0.02;
-    playMusicNote(bassFreq, bassDur, "sine", bassVol);
-    if (phase >= 3) playMusicNote(bassFreq * 2, bassDur, "sine", 0.04);
-    if (phase >= 4) playMusicNote(bassFreq, bassDur, "sawtooth", 0.025);
-  }
-  const noteIdx = MELODY_PATTERN[beat];
-  let melodyFreq = PENTA_C[noteIdx] * 2;
-  const melodyDur = beatDur * 0.6;
-  const playMelody = true; // Always play melody
-  if (phase >= 4 && (beat === 5 || beat === 13)) melodyFreq = 311;
-  if (phase >= 5 && beat % 2 === 1 && Math.random() < 0.3) {
-    melodyFreq = PENTA_C[noteIdx] * 2 + (Math.random() < 0.5 ? 15 : -15);
-  }
-  if (playMelody) {
-    const melVol = 0.04 + Math.min(phase - 1, 4) * 0.01;
-    playMusicNote(melodyFreq, melodyDur, "sine", melVol);
-  }
-  if (phase >= 3) {
-    const harmIdx = Math.min(noteIdx + 2, PENTA_C.length - 1);
-    const harmFreq = PENTA_C[harmIdx] * 2;
-    const detune = (Math.random() - 0.5) * (4 + phase * 2);
-    playMusicNote(harmFreq, melodyDur, "sine", 0.03, detune);
-  }
-  if (phase >= 5 && beat % 2 === 0) {
-    const arpIdx = (noteIdx + 1) % PENTA_C.length;
-    setTimeout(
-      () => {
-        if (musicPlaying)
-          playMusicNote(PENTA_C[arpIdx] * 2, beatDur * 0.25, "sine", 0.03);
-      },
-      (beatDur * 1000) / 2,
-    );
-  }
+    if (!Audio.ctx || !musicPlaying) return 0;
+    // Simple window check against nextNoteTime
+    // Ideally compare press time vs nearest quarter note
+    // This is simplified
+    return 0; // TODO: Reimplement accuracy check for new sequencer
 }
 
 // ── State machine ─────────────────────────────────────────────────
@@ -450,8 +526,12 @@ document.addEventListener("keydown", (e) => {
   initAudio();
 
   if (state === STATE.TITLE) {
-    if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
-      titleSelection = titleSelection === 0 ? 1 : 0;
+    if (e.code === "ArrowLeft") {
+      titleSelection = (titleSelection - 1 + 3) % 3;
+      sfxSelect();
+    }
+    if (e.code === "ArrowRight") {
+      titleSelection = (titleSelection + 1) % 3;
       sfxSelect();
     }
     if (e.code === "Space" || e.code === "Enter") {
@@ -637,7 +717,7 @@ function initBgClouds() {
       x: Math.random() * GW,
       y: 40 + Math.random() * 200,
       w: 60 + Math.random() * 120,
-      speed: 0.2 + Math.random() * 0.5,
+      speed: 0.6 + Math.random() * 1.2, // 3x faster (was 0.2-0.7)
       opacity: 0.15 + Math.random() * 0.25,
     });
   }
@@ -778,8 +858,8 @@ function calculateScore(isPerfect, round) {
   return Math.floor(100 * phaseMult * accuracyBonus);
 }
 function getRoundBPM(round) {
-  if (round <= 1) return 85;
-  if (round === 2) return 110;
+  if (round <= 1) return 105;
+  if (round === 2) return 125;
   if (round === 3) return 145;
   if (round === 4) return 185;
   if (round === 5) return 230;
@@ -793,15 +873,15 @@ function getCloudSpacing(round) {
 }
 // Jump velocity and gravity scale with round — big floaty jumps early, tighter later
 function getJumpVelocity(round) {
-  // Original was -18. Reduced to -15 for easier handling/more difficulty balance.
-  return -(15 - Math.min(round - 1, 6) * 0.8); 
+  // Steeper scaling for more difficulty
+  return -(16 - Math.min(round - 1, 6) * 1.2); 
 }
 function getBounceVelocity(round, combo) {
-  const base = 14 - Math.min(round - 1, 6) * 0.6; // 14 at round 1, ~10.4 at round 7+
+  const base = 13 - Math.min(round - 1, 6) * 0.6; // Reduced from 16 to match jump better
   return -(base + Math.min(combo * 0.12, 2));
 }
 function getGravity(round) {
-  return 0.35 + Math.min(round - 1, 8) * 0.04; // 0.35 at round 1, 0.67 at round 9+
+  return 0.65 + Math.min(round - 1, 8) * 0.06; // 0.65 -> 1.13 (steeper)
 }
 function getFallGravity(round) {
   return 0.4 + Math.min(round - 1, 8) * 0.04; // slightly heavier on the way down
@@ -814,7 +894,7 @@ function getBounceGravity(round) {
 function generateRunPlatform(startX, round) {
   // Creates a series of connected flat clouds the player runs across
   const platform = [];
-  const count = 4 + Math.min(round, 3); // more clouds at higher rounds
+  const count = 12 + Math.min(round, 3); // more clouds at higher rounds
   const spacing = 50; // tight spacing — feels like a continuous path
   let cx = startX;
   const type = Math.min(round - 1, 4);
@@ -1060,8 +1140,10 @@ function drawBackground(dt, vw) {
   ctx.fillStyle = skyGrad;
   ctx.fillRect(0, 0, vw, GH);
   const cloudSpeedMult = 1 + (phase - 1) * 0.3;
+  // Background clouds move faster with phase
+  const bgSpeed = 1 + (phase - 1) * 0.3; // Round 1: 1x, Round 5: 2.2x
   bgClouds.forEach((c) => {
-    c.x -= c.speed * cloudSpeedMult;
+    c.x -= c.speed * bgSpeed;
     if (c.x + c.w < -50) {
       c.x = GW + 50;
       c.y = 40 + Math.random() * 200;
@@ -1294,13 +1376,17 @@ function updateTitle(dt) {
     if (c.x + 100 < 0) c.x = GW + 50;
   });
   if (globalInputJustPressed && !showLeaderboardFromTitle) {
-    if (titleSelection === 0) {
-      gameMode = "1P";
-      startGame();
-    } else {
+    if (titleSelection === 2) {
+      showLeaderboardFromTitle = true;
+      sfxSelect();
+    } else if (titleSelection === 1) {
       gameMode = "2P";
       state = STATE.KEY_BIND;
       keyBindingPhase = 1;
+      sfxSelect();
+    } else {
+      gameMode = "1P";
+      startGame();
     }
   }
   if (globalInputJustPressed && showLeaderboardFromTitle)
@@ -2548,21 +2634,7 @@ function drawResultsScreen(p) {
       2,
     );
   } else {
-    if (leaderboard.length > 0) {
-      const lbY = centerY + 105;
-      drawStrokedText("TOP SCORES", GW / 2, lbY, C9_LIGHT, 14, "#000", 2);
-      const showCount = Math.min(3, leaderboard.length);
-      for (let i = 0; i < showCount; i++) {
-        const entry = leaderboard[i];
-        const ey = lbY + 20 + i * 18;
-        const medal =
-          i === 0 ? "\uD83E\uDD47" : i === 1 ? "\uD83E\uDD48" : "\uD83E\uDD49";
-        ctx.font = `14px 'Luckiest Guy', Impact, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.fillStyle = WHITE;
-        ctx.fillText(`${medal} ${entry.name} - ${entry.score}`, GW / 2, ey);
-      }
-    }
+    // Top scores removed from here
     if (p.stateTimer > 1.0) {
       const alpha = 0.5 + Math.sin(performance.now() * 0.004) * 0.5;
       ctx.save();
@@ -2570,7 +2642,7 @@ function drawResultsScreen(p) {
       drawStrokedText(
         "Press SPACE to continue",
         GW / 2,
-        centerY + 175,
+        centerY + 120,
         WHITE,
         16,
         "#000",
@@ -2721,30 +2793,19 @@ function drawTitleScreen() {
   const bounceY = 210 + Math.sin(titleBounce) * 12;
   // Player preview with animation
   const animTime = performance.now();
-  const jumpCycle = (animTime % 1000) / 1000;
-  let titleScaleY = 1;
-  let titleYOffset = 0;
-  let titlePose = 'idle';
-
-  if (jumpCycle < 0.2) {
-      titleScaleY = 0.9;
-      titleYOffset = 10;
-      titlePose = 'landing';
-  } else if (jumpCycle < 0.4) {
-      titleScaleY = 1.1;
-      titleYOffset = -20;
-      titlePose = 'jump_up';
-  }
+  // Toggle arms up/down every 600ms
+  const isArmsUp = Math.floor(animTime / 600) % 2 === 0;
+  const titlePose = isArmsUp ? 'jump_up' : 'idle';
 
   drawPlayer(
-    GW / 2 - 70, 
-    bounceY + titleYOffset, 
+    GW / 2 - 50, // Slight adjustment for smaller offset if needed, but keeping center
+    bounceY, 
     "excited", 
     0, 
-    2.5, 
+    1.8, // Reduced scale (was 2.5)
     titlePose, 
     1.0, 
-    titleScaleY,
+    1.0,
     0, 
     ''
   );
@@ -2771,9 +2832,15 @@ function drawTitleScreen() {
 
   // Mode selection
   const selY = titleY + 90;
-  const opts = ["1 PLAYER", "2 PLAYERS"];
-  for (let i = 0; i < 2; i++) {
-    const ox = GW / 2 + (i === 0 ? -90 : 90);
+  const opts = ["1 PLAYER", "2 PLAYERS", "LEADERBOARD"];
+  
+  // Calculate total width approx to center them
+  // 3 buttons: let's space them 150px apart
+  // i=0 at -150, i=1 at 0, i=2 at 150
+  
+  for (let i = 0; i < 3; i++) {
+    // 0 -> -150, 1 -> 0, 2 -> 150
+    const ox = GW / 2 + (i - 1) * 150;
     const selected = titleSelection === i;
     if (selected) {
       ctx.fillStyle = "rgba(0, 158, 226, 0.3)";
@@ -2789,7 +2856,7 @@ function drawTitleScreen() {
       ox,
       selY,
       selected ? WHITE : "#aaa",
-      selected ? 22 : 18,
+      selected ? 20 : 16, // Slightly smaller font to fit 3
       "#000",
       3,
     );
@@ -2822,17 +2889,6 @@ function drawTitleScreen() {
     GH - 45,
     "#ffcccc",
     14,
-    "#000",
-    2,
-  );
-  ctx.save();
-  ctx.globalAlpha = 0.6;
-  drawStrokedText(
-    "Press L for Leaderboard",
-    GW / 2,
-    GH - 20,
-    "#aaa",
-    12,
     "#000",
     2,
   );
