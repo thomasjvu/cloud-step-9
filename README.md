@@ -68,6 +68,8 @@ cloud-step-9/
 - Persistent scores via `leaderboard.json`
 - Offline fallback to localStorage
 
+> **Note:** Currently ships with a single character sprite. Additional characters coming soon.
+
 ## License
 
 [MIT](LICENSE)

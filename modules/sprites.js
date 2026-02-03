@@ -3,7 +3,6 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { ASSETS } from './assets.js';
-import { players } from './state.js';
 
 let ctx = null;
 
@@ -11,26 +10,11 @@ export function setCanvasContext(context) {
   ctx = context;
 }
 
-export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretchY, playerIndex = 0, actionResult = '', charType = -1) {
+export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretchY, playerIndex = 0, actionResult = '') {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rot);
   ctx.scale(scale * stretchX, scale * stretchY);
-
-  let isBoy = false;
-  if (charType !== -1) {
-     isBoy = (charType === 1);
-  } else {
-     if (players[playerIndex]) {
-        isBoy = (players[playerIndex].charType === 1);
-     } else {
-        isBoy = (playerIndex === 1);
-     }
-  }
-
-  const spinFrames = isBoy ? ASSETS.boySpinFrames : ASSETS.girlSpinFrames;
-  const charFrames = isBoy ? ASSETS.boyFrames : ASSETS.girlFrames;
-  const sheet = isBoy ? ASSETS.boy : ASSETS.girl;
 
   const drawW = 100;
   const drawH = 150;
@@ -58,18 +42,19 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
     col = idleFrame;
   }
 
-  // Disable interpolation so adjacent-frame pixels are never sampled
+  // Disable interpolation to prevent sub-pixel bleed
   const prevSmoothing = ctx.imageSmoothingEnabled;
   ctx.imageSmoothingEnabled = false;
 
-  if (actionResult === 'perfect' && pose === 'bounce' && spinFrames.length > 0) {
-      // Use pre-cleaned spin frames (alpha-thresholded, no bleed)
+  if (actionResult === 'perfect' && pose === 'bounce' && ASSETS.spinFrames.length > 0) {
+      // Use pre-cleaned spin frames (alpha-thresholded, cropped, no ghosts)
       const spinDuration = 500;
       const spinFrame = Math.floor((time % spinDuration) / (spinDuration / 5));
-      const frame = spinFrames[spinFrame];
+      const frame = ASSETS.spinFrames[spinFrame];
       ctx.drawImage(frame, 0, 0, frame.width, frame.height,
           -drawW / 1.5, -drawH / 1.5, 140, 140);
   } else {
+      // Shadow
       ctx.save();
       ctx.scale(1, 0.3);
       ctx.beginPath();
@@ -78,9 +63,9 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       ctx.fill();
       ctx.restore();
 
-      if (charFrames.length > 0 && charFrames[row]) {
+      if (ASSETS.charFrames.length > 0 && ASSETS.charFrames[row]) {
           // Use pre-extracted frame canvas (no fractional boundary bleed)
-          const frame = charFrames[row][col];
+          const frame = ASSETS.charFrames[row][col];
           ctx.drawImage(frame, 0, 0, frame.width, frame.height,
               -drawW / 2, -drawH / 2 - 20, drawW, drawH);
       } else {
@@ -90,7 +75,7 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
           const sy = Math.floor(row * 1024 / rows) + pad;
           const sx2 = Math.floor((col + 1) * 1024 / cols) - pad;
           const sy2 = Math.floor((row + 1) * 1024 / rows) - pad;
-          ctx.drawImage(sheet, sx, sy, sx2 - sx, sy2 - sy,
+          ctx.drawImage(ASSETS.char, sx, sy, sx2 - sx, sy2 - sy,
               -drawW / 2, -drawH / 2 - 20, drawW, drawH);
       }
   }

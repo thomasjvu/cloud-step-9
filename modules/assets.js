@@ -3,20 +3,16 @@
 // ═══════════════════════════════════════════════════════════════════
 
 export const ASSETS = {
-  girl: new Image(),
-  boy: new Image(),
-  girlSpin: new Image(),
-  boySpin: new Image(),
+  char: new Image(),
+  charSpin: new Image(),
   cloud: new Image(),
   rainCloud: new Image(),
   thunderCloud: new Image(),
   cloudNoFace: new Image(),
-  // Pre-cleaned spin frames (populated after images load)
-  girlSpinFrames: [],
-  boySpinFrames: [],
-  // Pre-extracted character frames [row][col] (populated after images load)
-  girlFrames: [],
-  boyFrames: [],
+  // Pre-cleaned spin frames (populated after image loads)
+  spinFrames: [],
+  // Pre-extracted character frames [row][col] (populated after image loads)
+  charFrames: [],
 };
 
 // Extract a single frame from a spritesheet into its own canvas,
@@ -41,8 +37,9 @@ function extractFrame(img, sx, sy, sw, sh, threshold) {
 function prepareSpinFrames(img) {
   const frames = [];
   const fw = 256; // 1280 / 5
+  const pad = 20; // crop edges to exclude ghost artifacts
   for (let i = 0; i < 5; i++) {
-    frames.push(extractFrame(img, i * fw, 0, fw, 256, true));
+    frames.push(extractFrame(img, i * fw + pad, pad, fw - pad * 2, 256 - pad * 2, true));
   }
   return frames;
 }
@@ -50,14 +47,15 @@ function prepareSpinFrames(img) {
 function prepareCharacterFrames(img) {
   const cols = 5;
   const rows = 3;
+  const pad = 6; // trim edges to avoid cross-cell bleed
   const grid = [];
   for (let r = 0; r < rows; r++) {
     grid[r] = [];
     for (let c = 0; c < cols; c++) {
-      const sx = Math.floor(c * 1024 / cols);
-      const sy = Math.floor(r * 1024 / rows);
-      const sx2 = Math.floor((c + 1) * 1024 / cols);
-      const sy2 = Math.floor((r + 1) * 1024 / rows);
+      const sx = Math.floor(c * 1024 / cols) + pad;
+      const sy = Math.floor(r * 1024 / rows) + pad;
+      const sx2 = Math.floor((c + 1) * 1024 / cols) - pad;
+      const sy2 = Math.floor((r + 1) * 1024 / rows) - pad;
       grid[r][c] = extractFrame(img, sx, sy, sx2 - sx, sy2 - sy, false);
     }
   }
@@ -65,28 +63,18 @@ function prepareCharacterFrames(img) {
 }
 
 export function loadImages() {
-  ASSETS.girl.src = "sprites/girl-spritesheet-final.png";
-  ASSETS.boy.src = "sprites/boy-spritesheet-final.png";
-  ASSETS.girlSpin.src = "sprites/girl_spin_clean.png";
-  ASSETS.boySpin.src = "sprites/boy_spin_clean.png";
+  // Attach onload BEFORE setting src so cached images still trigger
+  ASSETS.char.onload = () => {
+    ASSETS.charFrames = prepareCharacterFrames(ASSETS.char);
+  };
+  ASSETS.charSpin.onload = () => {
+    ASSETS.spinFrames = prepareSpinFrames(ASSETS.charSpin);
+  };
+
+  ASSETS.char.src = "sprites/girl-spritesheet-final.png";
+  ASSETS.charSpin.src = "sprites/girl_spin_clean.png";
   ASSETS.cloud.src = "sprites/cloud_spritesheet.png";
   ASSETS.rainCloud.src = "sprites/rain_cloud_perfect.png";
   ASSETS.thunderCloud.src = "sprites/thunder_cloud_perfect.png";
   ASSETS.cloudNoFace.src = "sprites/cloud_no_face.png";
-
-  // Pre-process spin sprites: threshold alpha to remove transparency artifacts
-  ASSETS.girlSpin.onload = () => {
-    ASSETS.girlSpinFrames = prepareSpinFrames(ASSETS.girlSpin);
-  };
-  ASSETS.boySpin.onload = () => {
-    ASSETS.boySpinFrames = prepareSpinFrames(ASSETS.boySpin);
-  };
-  // Pre-extract character frames to individual canvases to eliminate
-  // interpolation bleed from fractional pixel boundaries (1024/5 = 204.8)
-  ASSETS.girl.onload = () => {
-    ASSETS.girlFrames = prepareCharacterFrames(ASSETS.girl);
-  };
-  ASSETS.boy.onload = () => {
-    ASSETS.boyFrames = prepareCharacterFrames(ASSETS.boy);
-  };
 }
