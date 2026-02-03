@@ -71,8 +71,8 @@ export function loadImages() {
     ASSETS.spinFrames = prepareSpinFrames(ASSETS.charSpin);
   };
 
-  ASSETS.char.src = "sprites/girl-spritesheet-final.png";
-  ASSETS.charSpin.src = "sprites/girl_spin_clean.png";
+  ASSETS.char.src = "sprites/spritesheet.png";
+  ASSETS.charSpin.src = "sprites/spin.png";
   ASSETS.cloud.src = "sprites/cloud_spritesheet.png";
   ASSETS.rainCloud.src = "sprites/rain_cloud_perfect.png";
   ASSETS.thunderCloud.src = "sprites/thunder_cloud_perfect.png";
