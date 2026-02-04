@@ -16,38 +16,14 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
   ctx.rotate(rot);
   ctx.scale(scale * stretchX, scale * stretchY);
 
-  const drawW = 100;
-  const drawH = 150;
-
-  let row = 0;
-  let col = 0;
   const time = performance.now();
-
-  if (pose === 'run') {
-    row = 1;
-    const runFrame = Math.floor(time / 100) % 5;
-    col = runFrame;
-  } else if (pose === 'jump_up' || pose === 'bounce') {
-    row = 2;
-    col = 1;
-  } else if (pose === 'fall') {
-    row = 2;
-    col = 1;
-  } else if (pose === 'stomp' || pose === 'landing') {
-    row = 2;
-    col = 2;
-  } else {
-    row = 0;
-    const idleFrame = Math.floor(time / 200) % 5;
-    col = idleFrame;
-  }
 
   // Disable interpolation to prevent sub-pixel bleed
   const prevSmoothing = ctx.imageSmoothingEnabled;
   ctx.imageSmoothingEnabled = false;
 
   if (actionResult === 'perfect' && pose === 'bounce' && ASSETS.spinFrames.length > 0) {
-      // Use pre-cleaned spin frames (alpha-thresholded, cropped, no ghosts)
+      // Use pre-cleaned spin frames
       const spinDuration = 500;
       const spinFrame = Math.floor((time % spinDuration) / (spinDuration / 5));
       const frame = ASSETS.spinFrames[spinFrame];
@@ -64,20 +40,32 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       ctx.fill();
       ctx.restore();
 
-      if (ASSETS.charFrames.length > 0 && ASSETS.charFrames[row]) {
-          // Use pre-extracted frame canvas (no fractional boundary bleed)
-          const frame = ASSETS.charFrames[row][col];
+      let frame = null;
+      // Select frame based on pose
+      if (pose === 'run' && ASSETS.runFrames.length > 0) {
+          const runFrame = Math.floor(time / 100) % ASSETS.runFrames.length;
+          frame = ASSETS.runFrames[runFrame];
+      } else if ((pose === 'jump_up' || pose === 'bounce') && ASSETS.jumpFrames.length > 0) {
+          frame = ASSETS.jumpFrames[2]; // Mid-air pose
+      } else if (pose === 'fall' && ASSETS.jumpFrames.length > 0) {
+          frame = ASSETS.jumpFrames[3]; // Falling pose
+      } else if ((pose === 'stomp' || pose === 'landing') && ASSETS.jumpFrames.length > 0) {
+          frame = ASSETS.jumpFrames[4]; // Landing pose
+      } else if (ASSETS.idleFrames.length > 0) {
+          // Default to idle
+          const idleFrame = Math.floor(time / 200) % ASSETS.idleFrames.length;
+          frame = ASSETS.idleFrames[idleFrame];
+      }
+
+      if (frame) {
+          // New consolidated drawing logic for 256x256 frames
+          // We draw them into a square destination rect to preserve aspect ratio
+          const charSize = 145; 
           ctx.drawImage(frame, 0, 0, frame.width, frame.height,
-              -drawW / 2, -drawH / 2 - 20, drawW, drawH);
+              -charSize / 2, -charSize / 2 - 20, charSize, charSize);
       } else {
-          // Fallback: raw spritesheet (before frames are prepared)
-          const cols = 5, rows = 3, pad = 12;
-          const sx = Math.floor(col * 1024 / cols) + pad;
-          const sy = Math.floor(row * 1024 / rows) + pad;
-          const sx2 = Math.floor((col + 1) * 1024 / cols) - pad;
-          const sy2 = Math.floor((row + 1) * 1024 / rows) - pad;
-          ctx.drawImage(ASSETS.char, sx, sy, sx2 - sx, sy2 - sy,
-              -drawW / 2, -drawH / 2 - 20, drawW, drawH);
+          // Fallback if assets not loaded (should generally not happen if preloaded)
+          // Draw a placeholder or just nothing
       }
   }
 
