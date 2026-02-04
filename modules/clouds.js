@@ -8,7 +8,7 @@ import { getCloudCount, getCloudSpacing } from './physics.js';
 
 export function generateRunPlatform(startX, round) {
   const platform = [];
-  const count = 12 + Math.min(round, 3);
+  const count = 8 + Math.min(round, 3);
   const spacing = 50;
   let cx = startX;
   const type = Math.min(round - 1, 4);

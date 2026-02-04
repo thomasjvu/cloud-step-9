@@ -35,7 +35,7 @@ export function getCloudCount(round) {
 }
 
 export function getCloudSpacing(round) {
-  return Math.max(80, 180 - (round - 1) * 20);
+  return Math.max(80, 140 - (round - 1) * 15);
 }
 
 export function getJumpVelocity(round) {

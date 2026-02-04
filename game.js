@@ -84,7 +84,7 @@ function startGame() {
     p.runX = p.runPlatform[0].x;
     p.nimbus.x = p.runX;
     p.nimbus.y = GROUND_Y - 40;
-    p.runSpeed = 3 + Math.min(p.round * 0.5, 3);
+    p.runSpeed = 5 + Math.min(p.round * 0.5, 3);
     p.runAnimTimer = 0;
     p.keyBinding = playerKeys[i].key;
     p.keyLabel = gameMode === "1P" ? "SPACE" : playerKeys[i].label;
@@ -637,7 +637,7 @@ function updatePlayer(p, dt) {
         p.currentCloudIdx = 0;
         p.bossHits = 0;
         p.runX = p.runPlatform[0].x;
-        p.runSpeed = 3 + Math.min(p.round * 0.5, 3);
+        p.runSpeed = 5 + Math.min(p.round * 0.5, 3);
         p.runAnimTimer = 0;
         p.nimbus.x = p.runX;
         p.nimbus.y = GROUND_Y - 40;
