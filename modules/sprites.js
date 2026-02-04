@@ -31,24 +31,22 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       ctx.drawImage(frame, 0, 0, frame.width, frame.height,
           -spinSize / 2, -spinSize / 2, spinSize, spinSize);
   } else {
-      // Shadow
-      ctx.save();
-      ctx.scale(1, 0.3);
-      ctx.beginPath();
-      ctx.arc(0, 70, 20, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fill();
-      ctx.restore();
-
       let frame = null;
+      let charSize = 145;
+      
       // Select frame based on pose
       if (pose === 'run' && ASSETS.runFrames.length > 0) {
-          const runFrame = Math.floor(time / 100) % ASSETS.runFrames.length;
-          frame = ASSETS.runFrames[runFrame];
+          // Use only frames 2 and 3 for clean leg alternation
+          // Slowed down to 150ms to make the leg switch more visible
+          const runSequence = [2, 3];
+          const runFrame = Math.floor(time / 150) % runSequence.length;
+          frame = ASSETS.runFrames[runSequence[runFrame]];
       } else if ((pose === 'jump_up' || pose === 'bounce') && ASSETS.jumpFrames.length > 0) {
           frame = ASSETS.jumpFrames[2]; // Mid-air pose
+          charSize = 130; // Smaller for jump to prevent cutoff
       } else if (pose === 'fall' && ASSETS.jumpFrames.length > 0) {
           frame = ASSETS.jumpFrames[3]; // Falling pose
+          charSize = 130;
       } else if ((pose === 'stomp' || pose === 'landing') && ASSETS.jumpFrames.length > 0) {
           frame = ASSETS.jumpFrames[4]; // Landing pose
       } else if (ASSETS.idleFrames.length > 0) {
@@ -58,9 +56,7 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       }
 
       if (frame) {
-          // New consolidated drawing logic for 256x256 frames
-          // We draw them into a square destination rect to preserve aspect ratio
-          const charSize = 145; 
+          // Draw sprite (shadow is baked into the sprite images) 
           ctx.drawImage(frame, 0, 0, frame.width, frame.height,
               -charSize / 2, -charSize / 2 - 20, charSize, charSize);
       } else {
