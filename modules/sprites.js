@@ -51,7 +51,7 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       const spinDuration = 500;
       const spinFrame = Math.floor((time % spinDuration) / (spinDuration / 5));
       const frame = ASSETS.spinFrames[spinFrame];
-      const spinSize = 100;
+      const spinSize = 115;
       ctx.drawImage(frame, 0, 0, frame.width, frame.height,
           -spinSize / 2, -spinSize / 2, spinSize, spinSize);
   } else {
