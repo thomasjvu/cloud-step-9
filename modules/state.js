@@ -131,7 +131,6 @@ export function createPlayerState(playerIndex) {
     timeSlowdown: 0,
     cloud9Overlay: 0,
     cloud9Text: "",
-    phaseSpeedLines: [],
     state: STATE.READY,
     stateTimer: 0,
     inputJustPressed: false,

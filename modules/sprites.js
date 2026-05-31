@@ -36,10 +36,8 @@ export function drawPlayer(x, y, expression, rot, scale, pose, stretchX, stretch
       
       // Select frame based on pose
       if (pose === 'run' && ASSETS.runFrames.length > 0) {
-          // Use only frames 2 and 3 for clean leg alternation
-          // Slowed down to 150ms to make the leg switch more visible
-          const runSequence = [2, 3];
-          const runFrame = Math.floor(time / 150) % runSequence.length;
+          const runSequence = [0, 1, 2, 3, 4];
+          const runFrame = Math.floor(time / 90) % runSequence.length;
           frame = ASSETS.runFrames[runSequence[runFrame]];
       } else if ((pose === 'jump_up' || pose === 'bounce') && ASSETS.jumpFrames.length > 0) {
           frame = ASSETS.jumpFrames[2]; // Mid-air pose

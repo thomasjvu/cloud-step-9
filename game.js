@@ -44,7 +44,7 @@ import { setCanvasContext as setHudCtx, drawHUD } from './modules/hud.js';
 import { setCanvasContext as setScreensCtx, drawTitleScreen, drawKeyBindScreen, drawResultsScreen, draw2PResultsScreen } from './modules/screens.js';
 import {
   spawnImpactP, spawnStarsP, spawnTrailP, spawnCloud9BurstP,
-  spawnRingBurstP, spawnSpeedLinesP, addFloatingTextP,
+  spawnRingBurstP, addFloatingTextP,
   initBgClouds, initTitleClouds,
 } from './modules/effects.js';
 import { generateRunPlatform, generateCloudChain } from './modules/clouds.js';
@@ -602,7 +602,6 @@ function updatePlayer(p, dt) {
       if (p.stateTimer >= 2.0) {
         p.state = STATE.ASCEND;
         p.stateTimer = 0;
-        p.phaseSpeedLines = [];
         sfxPhaseUp();
       }
       break;
@@ -612,14 +611,7 @@ function updatePlayer(p, dt) {
       p.nimbus.pose = "jump_up";
       const prog = Math.min(1, p.stateTimer / 1.5);
 
-      const lineCount = prog < 0.4 ? 8 : prog < 0.8 ? 15 : 5;
-      spawnSpeedLinesP(p, lineCount);
-
       const easeOut = 1 - Math.pow(1 - prog, 3);
-      p.phaseSpeedLines = p.phaseSpeedLines.filter((l) => {
-        l.y += l.speed;
-        return l.y < GH + 100;
-      });
       p.nimbus.y = GROUND_Y - 80 - easeOut * (GH + 100);
       if (prog < 0.1 || prog > 0.9)
         setPhaseTransitionFlash(
@@ -645,7 +637,6 @@ function updatePlayer(p, dt) {
         p.nimbus.rotation = 0;
         p.nimbus.isFlipping = false;
         p.nimbus.flipAngle = 0;
-        p.phaseSpeedLines = [];
         p.ringActive = false;
         p.ringProgress = 0;
         p.actionPressed = false;

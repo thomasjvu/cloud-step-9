@@ -11,7 +11,6 @@ import {
 import { musicPlaying, beatPulse, musicBeat } from './audio.js';
 import { getActivationDist } from './physics.js';
 import { drawPlayer, drawCloudPuff, drawStormPuff } from './sprites.js';
-import { spawnSpeedLinesP } from './effects.js';
 
 let ctx = null;
 
@@ -349,89 +348,9 @@ export function drawPlayerViewport(p, dt) {
     ctx.save();
     ctx.filter = `grayscale(${bwAmount * 100}%) contrast(${100 + bwAmount * 60}%)`;
 
-    ctx.save();
-    p.phaseSpeedLines.forEach((l) => {
-      const lineAlpha = l.opacity * (1 + bwAmount * 0.8);
-      ctx.globalAlpha = Math.min(1, lineAlpha);
-      ctx.strokeStyle = bwAmount > 0.5 ? "#000" : WHITE;
-      ctx.lineWidth = l.width * (1 + bwAmount * 2);
-      ctx.beginPath();
-      ctx.moveTo(l.x, l.y);
-      ctx.lineTo(l.x, l.y + l.len);
-      ctx.stroke();
-    });
-    ctx.restore();
-
     drawPlayer(vw / 2, p.nimbus.y, p.nimbus.expression, p.nimbus.rotation, 1, p.nimbus.pose, p.nimbus.stretchX, p.nimbus.stretchY, p.index, '');
 
     ctx.restore(); // remove filter
-
-    if (bwAmount > 0.3) {
-      const lineArtAlpha = Math.min(1, (bwAmount - 0.3) / 0.4);
-      ctx.save();
-      ctx.globalAlpha = lineArtAlpha * 0.6;
-
-      const cx = vw / 2;
-      const cy = p.nimbus.y;
-      const burstCount = 24;
-      for (let i = 0; i < burstCount; i++) {
-        const angle = ((Math.PI * 2) / burstCount) * i + prog * 2;
-        const innerR = 30 + Math.sin(prog * 8 + i) * 10;
-        const outerR = 150 + prog * 200 + Math.sin(prog * 6 + i * 0.7) * 40;
-        ctx.strokeStyle = i % 2 === 0 ? "#000" : "#fff";
-        ctx.lineWidth = 1.5 + Math.sin(prog * 10 + i) * 0.8;
-        ctx.beginPath();
-        ctx.moveTo(
-          cx + Math.cos(angle) * innerR,
-          cy + Math.sin(angle) * innerR,
-        );
-        ctx.lineTo(
-          cx + Math.cos(angle) * outerR,
-          cy + Math.sin(angle) * outerR,
-        );
-        ctx.stroke();
-      }
-
-      const ringCount = 3;
-      for (let r = 0; r < ringCount; r++) {
-        const radius = 60 + r * 80 + prog * 100;
-        ctx.strokeStyle =
-          r % 2 === 0 ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.4)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
-    if (bwAmount > 0.6) {
-      const hatchAlpha = ((bwAmount - 0.6) / 0.4) * 0.12;
-      ctx.save();
-      ctx.globalAlpha = hatchAlpha;
-      ctx.strokeStyle = "#000";
-      ctx.lineWidth = 0.5;
-      for (let i = 0; i < 40; i++) {
-        const hx = Math.random() * vw;
-        const hy = Math.random() * GH;
-        const hLen = 15 + Math.random() * 25;
-        ctx.beginPath();
-        ctx.moveTo(hx, hy);
-        ctx.lineTo(hx + hLen * 0.7, hy + hLen);
-        ctx.stroke();
-      }
-      for (let i = 0; i < 20; i++) {
-        const hx = Math.random() * vw;
-        const hy = Math.random() * GH;
-        const hLen = 10 + Math.random() * 20;
-        ctx.beginPath();
-        ctx.moveTo(hx, hy);
-        ctx.lineTo(hx - hLen * 0.7, hy + hLen);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
 
     if (bwAmount > 0.2) {
       ctx.save();

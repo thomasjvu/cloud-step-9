@@ -3,7 +3,6 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { GW, GH, C9_BLUE, C9_LIGHT, WHITE, GOLD, PERFECT_GREEN } from './constants.js';
-import { getVW } from './state.js';
 
 export function spawnImpactP(p, x, y, count = 10, color = WHITE) {
   for (let i = 0; i < count; i++) {
@@ -84,20 +83,6 @@ export function spawnRingBurstP(p, x, y) {
       size: 3,
       color: C9_LIGHT,
       type: "circle",
-    });
-  }
-}
-
-export function spawnSpeedLinesP(p, count = 5) {
-  const vw = getVW();
-  for (let i = 0; i < count; i++) {
-    p.phaseSpeedLines.push({
-      x: Math.random() * vw,
-      y: -20 - Math.random() * 40,
-      len: 30 + Math.random() * 80,
-      speed: 15 + Math.random() * 25,
-      opacity: 0.3 + Math.random() * 0.5,
-      width: 1 + Math.random() * 2,
     });
   }
 }
